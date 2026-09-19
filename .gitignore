@@ -1,0 +1,27 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# tool caches
+.pytest_cache/
+.ruff_cache/
+
+# run artefacts. results/phase2_validation.json is tracked on purpose: it is
+# the phase 2 gate evidence and regenerates deterministically from
+# experiments/phase2_validation.py. everything the gpu runs write goes here.
+results/runs/
+*.jsonl
+phase1_gate.json
+hstar_census.json
+
+# appworld download and experiment outputs
+data/
+experiments/outputs/
+
+# local tooling and one-off prompts, kept on disk but out of the repo
+.claude/
+claude_code_prompt.md

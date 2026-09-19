@@ -1,0 +1,36 @@
+[project]
+name = "hgd"
+version = "0.1.0"
+description = "Interventional decomposition of the horizon gap in long-horizon tool-using LLM agents"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+# kept separate so the analysis and replay layers stay installable without a gpu
+# or a benchmark checkout. only the run layer needs these.
+run = [
+    "appworld==0.1.3.post1",
+    "requests>=2.31",
+    "vllm",
+]
+# not imported anywhere yet; reserved for the phase 3 hazard glmm
+stats = [
+    "statsmodels>=0.14",
+    "scipy>=1.13",
+]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
