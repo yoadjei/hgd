@@ -1,0 +1,209 @@
+{
+  "project": "Interventional decomposition of the horizon gap in long-horizon tool-using LLM agents",
+  "governing_documents": {
+    "contract": "docs/prompt.txt",
+    "specification": "docs/failure_geometry_research_audit.md",
+    "audit_date": "2026-08-24",
+    "target_version": "VERSION B - STRONG ICLR",
+    "target_venue": "ICLR 2027"
+  },
+  "last_updated": "2026-09-06",
+  "current_phase": "0",
+  "phase_status": {
+    "0_novelty": "IN PROGRESS - conditional pass on gate verdict, acceptance criterion unmet",
+    "1_infrastructure": "NOT AUTHORISED - blocked on Phase 0 close and on unverified AppWorld determinism",
+    "2_synthetic_validation": "NOT STARTED",
+    "3_matched_short_long": "NOT STARTED - blocked by floor-effect risk, see Phase 3a pre-gate",
+    "3a_atomic_feasibility": "PROPOSED (new, not in audit) - see docs/feasibility.md",
+    "4_interventions": "NOT STARTED",
+    "5_annotation": "NOT STARTED",
+    "6_scale_ablations": "NOT STARTED",
+    "7_writeup": "NOT STARTED"
+  },
+  "completed_tasks": [
+    "Verified HORIZON arXiv:2604.11978 exists; authors, scale and judge kappa confirmed; catastrophic-forgetting definition confirmed VERBATIM",
+    "Verified Khanal arXiv:2603.29231 exists; scale and metrics confirmed",
+    "Verified Sinha arXiv:2509.09677; published ICLR 2026; no tools, no environment, no share quantified",
+    "Verified CAR arXiv:2606.08275; intervention algebra confirmed; validated on synthetic SCMs only; real tools with side effects explicitly out of scope",
+    "Verified REFLECT arXiv:2606.09071 (audit missed)",
+    "Verified Peng et al. arXiv:2607.27283 (audit missed) - names the horizon residual",
+    "Verified ChainSWE arXiv:2607.02606 (audit missed) - separates transcript from environment state",
+    "Verified Shao et al. arXiv:2608.20563 (audit missed) - exposure conditioning and placebo-matched intervention",
+    "Established compute envelope on Kaggle 2xT4 and identified AppWorld floor effect for Qwen3-8B"
+  ],
+  "failed_or_contradicted_audit_claims": [
+    {
+      "audit_claim": "AppWorld has non-trivial open-weight success (audit section 18)",
+      "finding": "Qwen3-8B scores 5.4% TGC fp16 / 3.0% AWQ on AppWorld (arXiv:2604.11465). Contradicted at 8B; unverified at 32B.",
+      "severity": "HIGH - threatens estimability of Delta(s), h(u) and pi(e,u)",
+      "mitigation": "Phase 3a atomic feasibility pre-gate"
+    },
+    {
+      "audit_claim": "AppWorld is fully deterministic with fast reset, has scenario-dependency state checks, and reference solutions give H* (audit section 18)",
+      "finding": "The AppWorld primary paper confirms state-based unit tests only. Determinism, reset cost, intermediate checkpoints and reference solutions are NOT stated in the source.",
+      "severity": "HIGH - this is the Phase 1 gate",
+      "mitigation": "Verify against AppWorld docs/repo before Phase 1; determinism must be measured empirically"
+    },
+    {
+      "audit_claim": "Audit section 3 threat table is the complete set of closest work",
+      "finding": "Five relevant papers missing: Peng 2607.27283, ChainSWE 2607.02606, Shao 2608.20563, REFLECT 2606.09071, TraceToChain 2604.24579",
+      "severity": "HIGH - narrows the novelty claim",
+      "mitigation": "Differentiation paragraph now written against seven closest papers, not five"
+    },
+    {
+      "audit_claim": "Model set Qwen3-8B/32B/235B + Llama-3.3-70B + Mistral-24B (audit section 19)",
+      "finding": "Qwen3-235B and Llama-3.3-70B are physically impossible on 2xT4; Qwen3-32B is 4-13 weeks of quota",
+      "severity": "MEDIUM - method change, not scope change under prompt section 5",
+      "mitigation": "RESOLVED 2026-09-06: user approved amendment to Qwen3-4B/8B/14B/30B-A3B primary scaling axis + Mistral-Small-3.2-24B cross-family. Reasoning on/off ablation moves to the largest feasible Qwen3. Claims scoped to 4B-30B open-weight models; no frontier-scale trend is testable on this hardware."
+    },
+    {
+      "audit_claim": "HORIZON is COLM 2026 (published)",
+      "finding": "Ethics statement says 'Per COLM 2026 policy', indicating submission. Acceptance unverified.",
+      "severity": "LOW - citation accuracy",
+      "mitigation": "Cite as arXiv preprint until acceptance confirmed"
+    }
+  ],
+  "registered_hypotheses": [
+    {
+      "id": "H1",
+      "tag": "HYP",
+      "statement": "Delta(s) is negative with CI excluding zero for at least one model at s>=2 (excess horizon degradation beyond the independent-error prediction)",
+      "status": "untested",
+      "kill_condition": "A"
+    },
+    {
+      "id": "H2",
+      "tag": "HYP",
+      "statement": "The positional hazard h(u) of the first unrecovered critical error increases with normalized position u after controlling for task random effects",
+      "status": "untested"
+    },
+    {
+      "id": "H3",
+      "tag": "HYP",
+      "statement": "theta_self, the share of Delta removed by history scrubbing, is greater than zero with CI excluding zero",
+      "status": "untested",
+      "note": "DIRECTIONALLY CONTESTED IN PRINT. Sinha et al. support a positive effect; ChainSWE reports Seq 36.5% vs Seq+Mem 36.9%, i.e. approximately zero transcript effect once environment state carries the damage. This hypothesis can genuinely fail.",
+      "kill_condition": "B"
+    },
+    {
+      "id": "H4",
+      "tag": "HYP",
+      "statement": "theta_state, the share removed by oracle state refresh, is greater than zero with CI excluding zero",
+      "status": "untested",
+      "note": "ChainSWE's Oracle-vs-Seq contrast (58.9% vs 36.5%) is coarse prior evidence that this is the larger of the two."
+    },
+    {
+      "id": "H5",
+      "tag": "HYP",
+      "statement": "pi(e,u) is near 1 for state-changing tool errors and near 0 for read-only errors, with disjoint CIs",
+      "status": "untested"
+    },
+    {
+      "id": "H6",
+      "tag": "HYP",
+      "statement": "theta_self declines with model scale and under reasoning-on",
+      "status": "untested",
+      "note": "Sinha et al. report thinking mitigates self-conditioning. Scoped to 4B-30B on this hardware."
+    },
+    {
+      "id": "H7",
+      "tag": "HYP",
+      "statement": "Events labelled catastrophic forgetting are substantially removed by history scrubbing while the constraint remains in context, i.e. they are better explained as self-conditioning than as memory failure",
+      "status": "untested",
+      "note": "HORIZON's own definition, verified verbatim, states the constraint 'is still present in the context but not attended to during later reasoning' and lists Memory Limitation as a separate category. This is the headline non-obvious result if it holds."
+    },
+    {
+      "id": "H8",
+      "tag": "HYP",
+      "statement": "Reconciliation of the Sinha/ChainSWE conflict: self-conditioning is visible at step granularity and at high u, but is masked at coarse stage granularity and absorbed by environment state when errors leave a state trace",
+      "status": "untested",
+      "note": "Pre-registered directional hypothesis; sub-hypotheses H-A (dominated when environment absorbs), H-B (granularity), H-C (position-dependent) in docs/phase0_verification.md section 3"
+    }
+  ],
+  "registered_primary_tests": [
+    "Delta(3) CI excludes zero (paired bootstrap over scenarios, 2000 resamples)",
+    "hazard slope in u positive (cloglog GLMM, natural spline 3df, scenario random intercept)",
+    "theta_self CI excludes zero",
+    "theta_state CI excludes zero",
+    "theta_irrecov CI excludes zero"
+  ],
+  "multiplicity_correction": "Holm across the five pre-registered primary tests; all else exploratory",
+  "binding_design_changes": [
+    "D1 condition all mechanism estimates on exposure (Shao et al.)",
+    "D2 placebo-summary control cited as prior art not novelty (Shao et al.)",
+    "D3 pre-register checkpoint protocol and run protocol-sensitivity on Delta(s) (Peng et al.)",
+    "D4 cite horizon residual on first use of horizon gap; state sign convention Delta = -Gamma_H (Peng et al.)",
+    "D5 demote replay-validated labels from contribution to method (REFLECT)",
+    "D6 add pre-registered directional hypothesis on the Sinha/ChainSWE conflict",
+    "D7 adopt CAR point-of-commitment rule and CVT-RL intervention-validity gate"
+  ],
+  "outstanding_blockers": [
+    {
+      "id": "B1",
+      "blocker": "AppWorld determinism, reset cost, checkpoint granularity, reference solutions",
+      "blocks": "Phase 1",
+      "severity": "DOWNGRADED to MEDIUM 2026-09-06",
+      "resolved_findings": [
+        "State snapshot/restore API EXISTS: world.save_state() / world.load_state(state_id). This is the replay-from-step primitive the design requires.",
+        "Fast reset CONFIRMED: task loading <0.5s average via stored DB diffs relative to base databases.",
+        "Seeding exists (random_seed config field) but NO documented determinism guarantee - must be measured empirically at Phase 1.",
+        "Reference solutions available on TRAIN and DEV splits only, via ground_truth_mode='full' exposing .compiled_solution_module, .api_calls, .evaluation_code, .required_apis, .answer. Test splits expose difficulty metadata only.",
+        "Difficulty metadata available for ALL tasks: .metadata num_apis, num_apps, num_solution_code_lines - usable as covariates and as an H* proxy.",
+        "Evaluation is FINAL state-based unit tests only. Intermediate stage checkpoints must be CONSTRUCTED by decomposing evaluation_code. Anticipated by audit task T1.4."
+      ],
+      "residual_risk": "Determinism unmeasured; stage checkpoints must be built; work is constrained to train/dev splits to obtain reference solutions for H* and oracle-fix actions."
+    },
+    {
+      "id": "B6",
+      "blocker": "Preliminary signal that the horizon gap on AppWorld may not be negative",
+      "detail": "AppWorld reports GPT-4 at 48.7% Task Goal Completion vs 21.0% Scenario Goal Completion. If a scenario averages ~3 tasks, an independence null would predict SGC of roughly 0.49^3 = 0.115, versus 0.21 observed - i.e. BETTER than independent. This is a crude comparison (tasks within a scenario are not equal-difficulty independent draws, and TGC is averaged across scenarios of differing size) and must not be over-read, but it is a directional hint against H1 that was recorded BEFORE running anything.",
+      "blocks": "nothing yet",
+      "severity": "INFORMATIONAL - check explicitly at Phase 3"
+    },
+    {
+      "id": "B2",
+      "blocker": "Floor effect: Qwen3-8B at 5.4% TGC on native AppWorld tasks makes Delta(s) inestimable unless atomic subtasks with high p-hat exist",
+      "blocks": "Phase 3",
+      "severity": "HIGH",
+      "mitigation": "Phase 3a pre-gate"
+    },
+    {
+      "id": "B3",
+      "blocker": "Model-set amendment awaiting user decision",
+      "blocks": "Phase 3 planning",
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "B4",
+      "blocker": "Phase 0 acceptance criterion (two independent readers agree the differentiation is precise) is structurally unmet - there is one executor",
+      "blocks": "formal Phase 0 close",
+      "severity": "MEDIUM"
+    },
+    {
+      "id": "B5",
+      "blocker": "Full-text verification outstanding for Lu et al. 2509.25370, CausalFlow 2605.25338, Rabanser 2602.16666, TraceToChain 2604.24579",
+      "blocks": "final differentiation paragraph",
+      "severity": "LOW"
+    }
+  ],
+  "closest_papers": [
+    "HORIZON 2604.11978",
+    "Khanal 2603.29231",
+    "Sinha 2509.09677",
+    "Lu 2509.25370",
+    "CAR 2606.08275",
+    "Peng 2607.27283 (added by verification)",
+    "ChainSWE 2607.02606 (added by verification)"
+  ],
+  "known_deviations_from_protocol": [
+    "Closest-paper set expanded from five to seven",
+    "Phase 3a inserted before Phase 3",
+    "Model set amendment proposed, not yet approved"
+  ],
+  "exploratory_analyses": [],
+  "dataset_model_versions": {
+    "appworld": "UNPINNED - to be fixed at Phase 1",
+    "inference_stack": "vLLM, version to be pinned at Phase 1",
+    "models": "PENDING DECISION - see blocker B3"
+  }
+}
