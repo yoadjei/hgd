@@ -1,0 +1,79 @@
+{
+  "planted": {
+    "base_error_rate": 0.18,
+    "self_conditioning": 0.45,
+    "staleness": 0.3
+  },
+  "n_scenarios": 400,
+  "delta_full": -0.0793277970133841,
+  "theta": {
+    "self": {
+      "true": 0.5732552555260734,
+      "estimated": 0.5732552555260734
+    },
+    "state": {
+      "true": 0.30861818995764423,
+      "estimated": 0.30861818995764423
+    }
+  },
+  "theta_null": -0.0,
+  "identification_probe": {
+    "theta_true": 0.5323135767268989,
+    "modes": {
+      "remove": {
+        "estimated": 0.6031955574882332,
+        "bias": 0.07088198076133423
+      },
+      "length_matched": {
+        "estimated": 0.5323135767268989,
+        "bias": 0.0
+      }
+    }
+  },
+  "d10_reduces_bias": true,
+  "placebo": {
+    "theta_oracle": 0.30861818995764423,
+    "theta_placebo": -0.0,
+    "passes": true
+  },
+  "propagation": {
+    "0.2": {
+      "delete": {
+        "point": 1.0,
+        "low": 0.986547584343153,
+        "high": 1.0
+      },
+      "read": {
+        "point": 0.0,
+        "low": -0.009512294334296505,
+        "high": 0.009512294334296505
+      }
+    },
+    "0.5": {
+      "delete": {
+        "point": 1.0,
+        "low": 0.986547584343153,
+        "high": 1.0
+      },
+      "read": {
+        "point": 0.0,
+        "low": -0.009512294334296505,
+        "high": 0.009512294334296505
+      }
+    },
+    "0.8": {
+      "delete": {
+        "point": 1.0,
+        "low": 0.986547584343153,
+        "high": 1.0
+      },
+      "read": {
+        "point": 0.0,
+        "low": -0.009512294334296505,
+        "high": 0.009512294334296505
+      }
+    }
+  },
+  "t22_passes": true,
+  "passes_gate": true
+}
