@@ -11,8 +11,8 @@ ablation list requires an H* sensitivity analysis. Making the choice explicit
 and logged turns that analysis into a change of argument.
 
 The two strategies differ in availability as well as in value: ``api_calls``
-comes from `ground_truth` and exists only on train/dev, while
-``num_solution_code_lines`` is exposed as task metadata on every split.
+comes from `ground_truth` and exists only on train/dev, while the solution-line
+count is exposed as task metadata on every split.
 """
 
 from __future__ import annotations
@@ -61,13 +61,25 @@ def intrinsic_horizon(
         # repeats count: calling the same api twice is two actions
         value = len(calls)
     else:
-        # top-level on the real object, nested under metadata in dict fixtures
-        value = ground_truth_field(ground_truth, "num_solution_code_lines")
+        # the compiled count is preferred because the uncompiled one is
+        # degenerate. the census over all 90 train tasks on 2026-09-20 read
+        # num_solution_code_lines as exactly 3 for every task, against api call
+        # counts spanning 5 to 244, so it carries no information about task
+        # size; num_compiled_solution_code_lines spans 18 to 86. taking the
+        # uncompiled field would set H* to 3 across a whole split and make u
+        # meaningless precisely where api_calls is withheld.
+        for name in ("num_compiled_solution_code_lines", "num_solution_code_lines"):
+            value = ground_truth_field(ground_truth, name)
+            if value is None:
+                metadata = ground_truth_field(ground_truth, "metadata") or {}
+                value = ground_truth_field(metadata, name)
+            if value is not None:
+                break
         if value is None:
-            metadata = ground_truth_field(ground_truth, "metadata") or {}
-            value = ground_truth_field(metadata, "num_solution_code_lines")
-        if value is None:
-            raise ValueError("ground truth has no 'num_solution_code_lines'")
+            raise ValueError(
+                "ground truth has no 'num_compiled_solution_code_lines' or "
+                "'num_solution_code_lines'"
+            )
 
     if value <= 0:
         raise ValueError(f"intrinsic horizon must be positive, got {value}")

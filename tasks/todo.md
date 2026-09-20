@@ -87,6 +87,13 @@ The probe did its job. Every one of these would have corrupted results silently.
 | R5 | Harness terminated on exact action string | AppWorld signals completion via `apis.supervisor.complete_task()` inside a code block, and that call must *execute*. Every episode would have run to the 3H\* limit, inflating cost and stamping a step-limit event on finished trajectories. | fixed — sentinel path + `env.task_completed()` |
 | R6 | `evaluate()` prints a full report per call | Called once per step for `state_hash`/`snapshot`; one episode buries its own log, and the I/O is a real slowdown. | fixed — suppressed in adapter and gate |
 
+### Defects found by the second gate run and the H\* census (20 Sep 2026)
+
+| # | Defect | Consequence if unfixed | Status |
+|---|---|---|---|
+| R7 | `compiled_solution_code` is a `def solution(apis, requester)` wrapper, not a script | `execute()` defines the function and never calls it, so the world never moves. The no-op guard caught it; without the guard the gate would have reported 20/20 a second time. | **open** — `notebooks/solution_source_probe.py` enumerates the real invocation |
+| R8 | `num_solution_code_lines` is exactly 3 on all 90 train tasks | A constant cannot measure solution length. `HStarStrategy.SOLUTION_LINES` would set H\* = 3 for every task on held-out splits, where it is the *only* available strategy, making u meaningless exactly where `api_calls` is withheld. | fixed — prefers `num_compiled_solution_code_lines` (18–86, median 37), 2 regression tests |
+
 ### Built since
 
 - [x] `logging.py` — append-only JSONL, flushed per trajectory, grouped by `run_id`, 9 tests.
@@ -98,7 +105,10 @@ The probe did its job. Every one of these would have corrupted results silently.
 - [x] `vllm_client.py` — `Model` over the OpenAI-compatible API, injected transport, 16 tests.
       HTTP rather than in-process so the server batches concurrent episodes; that batching is
       what makes the budget feasible.
-- [ ] **RUN the gate on Kaggle** ← the actual acceptance test
+- [ ] **RUN the gate** ← the actual acceptance test. Two attempts so far, both
+      void rather than failed. Run 1 executed `api_calls` (no-op literals); run 2
+      executed `compiled_solution_code` (a function definition, never called).
+      Blocked on R7. **Determinism remains unmeasured.**
 - [ ] Rerun the gate on model-generated trajectories (gold solutions never hit error paths)
 - [ ] vLLM client implementing `Model` (not needed for the gate; needed for Phase 2 onward)
 - **Acceptance:** 100% replay fidelity on 20 real AppWorld trajectories.
@@ -134,6 +144,30 @@ Inserted because **blocker B2**: Qwen3-8B scores 5.4% TGC on native AppWorld tas
   infeasible at this budget. Do not proceed and hope.
 - Cost: ~2–4 GPU-hours. Highest information per GPU-hour in the programme.
 
+### H\* census, all 90 train tasks (20 Sep 2026) → `hstar_census.json`
+
+| measure | min | p25 | median | p75 | max |
+|---|---|---|---|---|---|
+| `api_calls` | 5 | 18 | 36 | 70 | 244 |
+| `num_compiled_solution_code_lines` | 18 | 28 | 37 | 46 | 86 |
+| `num_solution_code_lines` | 3 | 3 | 3 | 3 | 3 — degenerate, see R8 |
+
+**The audit's 3·H\* step limit is affordable and is retained.** At the median,
+2·H\* is 72 steps and 3·H\* is 108; the 810-episode MVE costs 17.5M and 26.2M
+output tokens respectively, which is 9.7 h and 14.6 h on 2×T4 at 500 tok/s, or
+0.3 and 0.5 weeks of Kaggle quota. The earlier worry that H\* = 71 on the first
+task threatened the budget was wrong — that task sits at p75, not the median.
+
+Caveat on the estimate: it counts output tokens only. Prefill grows with the
+transcript over 108 steps, and T4 (compute capability 7.5) cannot run
+FlashAttention-2, so vLLM falls back to xformers. Treat 14.6 h as a floor and
+budget two to three times it. Still inside one week of quota.
+
+**Pilot set:** the 30 cheapest tasks have H\* from 5 to 22, median 11, starting
+`e85d92a_1/_2/_3`, `cf6abd2_1/_2/_3`, `60d0b5b_1/_2/_3`. Note the `_1/_2/_3`
+suffixes: AppWorld ships three instances per scenario, which is what the matched
+short/long design needs for scenario pairing.
+
 ---
 
 ## Phase 3 — Matched short/long  *(blocked by 3a)*
@@ -159,6 +193,11 @@ Inserted because **blocker B2**: Qwen3-8B scores 5.4% TGC on native AppWorld tas
    executable on Kaggle 2×T4. Proposed: Qwen3-4B/8B/14B/30B-A3B + Mistral-Small-24B. Method change,
    not a scope change under prompt §5. **Awaiting user decision.**
 2. **Fallback if 3a fails** — decide *after* the pre-gate produces a number, not before.
+3. **Step limit** — ~~resolved~~ the census says 3·H\* is affordable; the audit's value stands.
+4. **Platform** — Colab or Kaggle. The install log showed `google-colab` and a
+   `/usr/local/lib/python3.12/dist-packages` path, which are Colab markers. It matters
+   because Colab free gives one T4, not two, so `--tensor-parallel-size 2` would fail at
+   server startup and the census throughput figure would halve. **Awaiting confirmation.**
 
 ---
 

@@ -19,11 +19,14 @@ from hgd.horizon import HStarStrategy, ground_truth_field, intrinsic_horizon
 class GroundTruthObject:
     """Shape verified against appworld 0.1.3.post1 on 2026-09-06."""
 
-    def __init__(self, api_calls=None, num_solution_code_lines=None):
+    def __init__(self, api_calls=None, num_solution_code_lines=None,
+                 num_compiled_solution_code_lines=None):
         if api_calls is not None:
             self.api_calls = api_calls
         if num_solution_code_lines is not None:
             self.num_solution_code_lines = num_solution_code_lines
+        if num_compiled_solution_code_lines is not None:
+            self.num_compiled_solution_code_lines = num_compiled_solution_code_lines
 
 
 def test_api_calls_read_from_an_object_attribute():
@@ -58,6 +61,28 @@ def test_object_missing_the_requested_field_still_raises_clearly():
 def test_object_with_an_empty_api_call_list_is_rejected():
     with pytest.raises(ValueError, match="positive"):
         intrinsic_horizon(GroundTruthObject(api_calls=[]), HStarStrategy.API_CALLS)
+
+
+# --- the degenerate uncompiled line count ----------------------------------
+
+
+def test_compiled_line_count_wins_over_the_uncompiled_one():
+    """The census read num_solution_code_lines as 3 on all 90 train tasks.
+
+    A constant cannot measure solution length, and taking it would set H* to 3
+    across a whole split. The compiled count spans 18 to 86 and is preferred.
+    """
+    ground_truth = GroundTruthObject(
+        num_solution_code_lines=3, num_compiled_solution_code_lines=37
+    )
+
+    assert intrinsic_horizon(ground_truth, HStarStrategy.SOLUTION_LINES) == 37
+
+
+def test_uncompiled_line_count_is_still_used_when_it_is_all_there_is():
+    ground_truth = GroundTruthObject(num_solution_code_lines=18)
+
+    assert intrinsic_horizon(ground_truth, HStarStrategy.SOLUTION_LINES) == 18
 
 
 # --- the shared accessor ---------------------------------------------------
