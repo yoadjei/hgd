@@ -91,7 +91,8 @@ The probe did its job. Every one of these would have corrupted results silently.
 
 | # | Defect | Consequence if unfixed | Status |
 |---|---|---|---|
-| R7 | `compiled_solution_code` is a `def solution(apis, requester)` wrapper, not a script | `execute()` defines the function and never calls it, so the world never moves. The no-op guard caught it; without the guard the gate would have reported 20/20 a second time. | **open** — `notebooks/solution_source_probe.py` enumerates the real invocation |
+| R7 | `compiled_solution_code` is a `def solution(apis, requester)` wrapper, not a script | `execute()` defines the function and never calls it, so the world never moves. The no-op guard caught it; without the guard the gate would have reported 20/20 a second time. | fixed — define then `solution(apis, requester)`; probe moved the task from 1/2 to 2/2 passing |
+| R9 | `_silenced()` did not suppress the real evaluation report | AppWorld reports through a stream captured before the redirect, so two nested `redirect_stdout` layers leaked thousands of lines. The adapter's test used a `print`-based fake, so it passed while the real package flooded. Called once per step, this buries an episode's own log. | fixed — duplicates descriptors 1 and 2 as well as redirecting the streams; regression test writes past `sys.stdout` via `os.write` |
 | R8 | `num_solution_code_lines` is exactly 3 on all 90 train tasks | A constant cannot measure solution length. `HStarStrategy.SOLUTION_LINES` would set H\* = 3 for every task on held-out splits, where it is the *only* available strategy, making u meaningless exactly where `api_calls` is withheld. | fixed — prefers `num_compiled_solution_code_lines` (18–86, median 37), 2 regression tests |
 
 ### Built since
@@ -108,7 +109,8 @@ The probe did its job. Every one of these would have corrupted results silently.
 - [ ] **RUN the gate** ← the actual acceptance test. Two attempts so far, both
       void rather than failed. Run 1 executed `api_calls` (no-op literals); run 2
       executed `compiled_solution_code` (a function definition, never called).
-      Blocked on R7. **Determinism remains unmeasured.**
+      R7 is now fixed and v3 of the cell is ready. **Determinism remains
+      unmeasured until it runs.**
 - [ ] Rerun the gate on model-generated trajectories (gold solutions never hit error paths)
 - [ ] vLLM client implementing `Model` (not needed for the gate; needed for Phase 2 onward)
 - **Acceptance:** 100% replay fidelity on 20 real AppWorld trajectories.

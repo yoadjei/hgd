@@ -30,6 +30,9 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -44,9 +47,38 @@ def _silenced():
     the adapter calls it for both `state_hash` and `snapshot` — at least once per
     step. Unsuppressed, one episode buries its own log under thousands of lines,
     and on a hosted notebook the I/O is a measurable slowdown.
+
+    Redirected at the file descriptor rather than at ``sys.stdout``. AppWorld
+    reports through a console that captures the stream when it is constructed,
+    so a later ``redirect_stdout`` never sees the writes: the Phase 1 probe on
+    2026-09-20 had reports flood through two nested layers of it. Falls back to
+    the stream-level redirect where descriptors cannot be duplicated, which is
+    the case in some notebook kernels.
     """
-    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        yield
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+
+    saved: list[tuple[int, int]] = []
+    with tempfile.TemporaryFile() as sink:
+        try:
+            # literal 1 and 2, not sys.stdout.fileno(): under pytest capture and
+            # in notebook kernels the stream object has no usable descriptor and
+            # asking it raises, which silently skipped the whole redirect.
+            for descriptor in (1, 2):
+                with contextlib.suppress(OSError, ValueError):
+                    saved.append((descriptor, os.dup(descriptor)))
+                    os.dup2(sink.fileno(), descriptor)
+            # both layers: the descriptors catch console and C-level writes, the
+            # stream redirect catches ordinary prints in kernels whose streams
+            # are not descriptor-backed.
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                yield
+        finally:
+            for descriptor, backup in saved:
+                with contextlib.suppress(OSError, ValueError):
+                    os.dup2(backup, descriptor)
+                    os.close(backup)
 
 
 class _World(Protocol):

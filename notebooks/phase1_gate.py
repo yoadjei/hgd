@@ -144,27 +144,32 @@ def probe() -> list[str]:
 
 
 def gold_actions(task_id: str) -> list[str]:
-    """Executable gold solution code for a task.
+    """Executable gold solution for a task, as a two-step action sequence.
 
-    **Not** `ground_truth.api_calls`. That field is a list of HTTP *records*
-    (`{'method': 'get', 'url': '/supervisor/profile', 'data': {}}`), which
-    `execute()` evaluates as dict literals — a silent no-op. The first gate run
-    did exactly that: nothing executed, every replay pair matched trivially, and
-    the gate would have reported 20/20 while measuring nothing.
+    Two earlier action sources were wrong, both silently.
 
-    `compiled_solution_code` is real Python against `apis.*`.
+    `ground_truth.api_calls` is a list of HTTP *records* such as
+    `{'method': 'get', 'url': '/supervisor/profile', 'data': {}}`, which
+    `execute()` evaluates as dict literals, a no-op. Nothing ran and every
+    replay pair matched trivially.
+
+    `compiled_solution_code` on its own is a `def solution(apis, requester)`
+    wrapper, so `execute()` defined the function and never called it. The world
+    stayed untouched and the second gate run was void for the same reason.
+
+    Both steps are needed: define, then invoke. Verified by
+    `solution_source_probe.py` on 2026-09-20, where the probe task moved from
+    one passing test to two. `apis` and `requester` are both already bound in
+    the shell. `compiled_solution_code_body` also exists and is the likelier
+    source for per-step oracle fixes later.
     """
     from appworld import AppWorld
 
     with AppWorld(
         task_id=task_id, experiment_name=EXPERIMENT, ground_truth_mode="full"
     ) as world:
-        ground_truth = world.task.ground_truth
-        for field in ("compiled_solution_code", "solution_code"):
-            code = getattr(ground_truth, field, None)
-            if code:
-                return [str(code)]
-        return []
+        code = getattr(world.task.ground_truth, "compiled_solution_code", None)
+        return [str(code), "solution(apis, requester)"] if code else []
 
 
 def compare_digests(task_id: str, actions: list[str]) -> dict[str, object]:

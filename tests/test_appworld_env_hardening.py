@@ -14,6 +14,8 @@ Two defects the Phase 1 probe exposed:
    first gate run measured nothing while reporting success.
 """
 
+import os
+
 import pytest
 
 from hgd.appworld_env import AppWorldEnvironment, evaluation_digest
@@ -104,6 +106,44 @@ def test_suppression_does_not_change_the_digest(env):
 
     assert env.state_hash() == env.state_hash()
     assert env.snapshot()["failures"] == ["b"]
+
+
+class FileDescriptorEvaluation:
+    """Writes past ``sys.stdout``, as the real package's console does.
+
+    AppWorld reports through a console holding the stream it was constructed
+    with, so redirecting ``sys.stdout`` afterwards does not reach it. Writing
+    straight to the descriptor reproduces that without depending on rich.
+    """
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def to_dict(self):
+        os.write(1, b"=" * 60 + b"\nOverall Stats: Num Passed Tests : 1\n")
+        return dict(self._payload)
+
+
+def test_report_written_past_sys_stdout_is_still_suppressed(capfd):
+    """Regression: two nested redirect_stdout layers did not stop the real report."""
+    class World(NoisyWorld):
+        def evaluate(self):
+            return FileDescriptorEvaluation(
+                {"passes": ["a"], "failures": ["b"], "success": False, "num_tests": 2}
+            )
+
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: World(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test",
+    )
+    env.reset("train/t1", seed=0)
+    capfd.readouterr()
+
+    digest = env.state_hash()
+
+    assert capfd.readouterr().out == ""
+    assert digest
 
 
 # --- gold solution ---------------------------------------------------------
