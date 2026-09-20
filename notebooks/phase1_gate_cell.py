@@ -68,35 +68,36 @@ def run_gold(w, code):
         return str(w.execute("solution(apis, requester)"))[-300:]
 
 
-ids = list(load_task_ids("train"))[:N]
+def measure(ids):
+    """The whole gate. Prints nothing; every result goes into F.
 
-# sanity check: the gold solution must move the state on one task before the
-# gate means anything at all.
-probe_code = gold_code(ids[0])
-with AppWorld(task_id=ids[0], experiment_name=EXP, ground_truth_mode="full") as w:
-    before = digest(w)
-    tail = run_gold(w, probe_code)
-    after = digest(w)
-F["gold_changes_state"] = before != after
-F["probe_output_tail"] = tail
-print(f"gold solution: {len(probe_code)} chars, changes state: {F['gold_changes_state']}")
-print("output tail:", repr(tail[:200]))
+    Runs entirely inside one `silenced()` block, world construction and
+    teardown included. Wrapping only the `evaluate()` calls was not enough:
+    reports still leaked, because AppWorld also reports on close, and the noise
+    buried the fidelity line under hundreds of lines of report.
+    """
+    probe_code = gold_code(ids[0])
+    with AppWorld(task_id=ids[0], experiment_name=EXP, ground_truth_mode="full") as w:
+        before = digest(w)
+        F["probe_output_tail"] = run_gold(w, probe_code)
+        F["gold_changes_state"] = digest(w) != before
+    F["gold_code_chars"] = len(probe_code)
+    if not F["gold_changes_state"]:
+        return
 
-if not F["gold_changes_state"]:
-    print("\n!! the gold solution still did not move the state. the gate is void.")
-    print("   paste this output back; do not read anything into a fidelity number.")
-else:
     matched, diverged, no_effect, skipped, errored = 0, [], [], [], []
     for tid in ids:
         try:
             code = gold_code(tid)
             if not code:
-                skipped.append(tid); continue
+                skipped.append(tid)
+                continue
             with AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full") as w:
                 baseline = digest(w)
             ds = []
             for _ in range(2):
-                with AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full") as w:
+                with AppWorld(task_id=tid, experiment_name=EXP,
+                              ground_truth_mode="full") as w:
                     run_gold(w, code)
                     ds.append(digest(w))
             if ds[0] == baseline:
@@ -115,13 +116,33 @@ else:
                  "rate": matched / total if total else 0.0,
                  # a run whose tasks never moved is void, not passing
                  "passes_gate": total > 0 and matched == total and not no_effect}
-    print(f"\nfidelity {matched}/{total}  no_effect={len(no_effect)}"
-          f"  skipped={len(skipped)}  errored={len(errored)}")
-    if errored:
-        print("first errors:", errored[:3])
-    print("GATE PASSED - Phase 3a permitted." if F["gate"]["passes_gate"]
+
+
+ids = list(load_task_ids("train"))[:N]
+try:
+    with silenced():
+        measure(ids)
+except Exception as e:
+    F["fatal"] = f"{type(e).__name__}: {e}"[:600]
+
+# --- everything below is the only output this cell produces ----------------
+json.dump(F, open("phase1_gate.json", "w"), indent=2, default=str)
+
+print(f"gold solution: {F.get('gold_code_chars')} chars, "
+      f"changes state: {F.get('gold_changes_state')}")
+if F.get("fatal"):
+    print("FATAL:", F["fatal"])
+elif not F.get("gold_changes_state"):
+    print("\n!! the gold solution still did not move the state. the gate is void.")
+    print("   do not read anything into a fidelity number.")
+else:
+    g = F["gate"]
+    print(f"fidelity {g['matched']}/{g['total']}  no_effect={len(g['no_effect'])}"
+          f"  skipped={len(g['skipped'])}  errored={g['n_errored']}")
+    if g["errored"]:
+        print("first errors:", g["errored"][:3])
+    print("GATE PASSED - Phase 3a permitted." if g["passes_gate"]
           else "GATE NOT PASSED - do not proceed to causal analysis.")
 
-json.dump(F, open("phase1_gate.json", "w"), indent=2, default=str)
 print("\n--- paste this back ---")
 print(json.dumps(F, indent=2, default=str)[:2500])
