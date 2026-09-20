@@ -1,29 +1,35 @@
-# phase 1 gate v3, paste-able single cell, cpu only. kill condition C.
+# phase 1 gate v4, paste-able single cell, cpu only. kill condition C.
 #
-# the action source took three attempts to get right, each failure silent:
-#   v1  api_calls               -> http record dicts, execute() reads them as
-#                                  no-op literals. nothing ran.
-#   v2  compiled_solution_code  -> a `def solution(apis, requester)` wrapper.
-#                                  execute() defined it and never called it.
-#   v3  the same wrapper, then `solution(apis, requester)`. verified by
-#       notebooks/solution_source_probe.py on 2026-09-20: the task went from
-#       1/2 to 2/2 passing tests, so the world genuinely moved.
+# set N = 3 for a smoke test first, then N = 20 for the real gate.
 #
-# the no-op guard caught v1 and v2. without it this cell would have printed
-# 20/20 PASS twice while measuring nothing.
-import contextlib, hashlib, io, json, os, sys, tempfile
+# the action source took three attempts, each failure silent:
+#   v1  api_calls              -> http record dicts; execute() reads them as
+#                                 no-op literals, so nothing ran
+#   v2  compiled_solution_code -> a `def solution(apis, requester)` wrapper;
+#                                 execute() defined it and never called it
+#   v3  the wrapper, then `solution(apis, requester)`. verified on 2026-09-20:
+#       the probe task went from 1/2 to 2/2 passing, so the world moved.
+#
+# v4 is about survivability rather than correctness. v3 built four worlds per
+# task, printed nothing for minutes, and wrote its result only at the very end,
+# so an interrupted run left no evidence at all. this builds two worlds per
+# task, prints one line per task, and rewrites the json after every task.
+import contextlib, hashlib, io, json, os, sys, tempfile, time
 from appworld import AppWorld, load_task_ids
 
-N, EXP = 20, "phase1_gate_v3"
-F = {"action_source": "compiled_solution_code + solution(apis, requester)"}
+N, EXP = 3, "phase1_gate_v4"
+RESULT = "phase1_gate.json"
+F = {"n_requested": N,
+     "action_source": "compiled_solution_code + solution(apis, requester)"}
 
 
 @contextlib.contextmanager
 def silenced():
-    # evaluate() prints a full report per call. redirect_stdout alone does not
-    # stop it: the package reports through a stream captured before the
-    # redirect. duplicate the descriptors as well, using literal 1 and 2
-    # because a notebook stream has no usable fileno().
+    # evaluate() prints a full report per call, and the package also reports on
+    # world construction and close. redirect_stdout alone does not stop it, so
+    # the descriptors are duplicated too. literal 1 and 2, because a notebook
+    # stream has no usable fileno() and asking it raises, which silently
+    # skipped the whole redirect in v3.
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
@@ -34,7 +40,8 @@ def silenced():
                 with contextlib.suppress(OSError, ValueError):
                     saved.append((fd, os.dup(fd)))
                     os.dup2(sink.fileno(), fd)
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                 contextlib.redirect_stderr(io.StringIO()):
                 yield
         finally:
             for fd, backup in saved:
@@ -44,8 +51,7 @@ def silenced():
 
 
 def digest(w):
-    with silenced():
-        p = w.evaluate().to_dict()
+    p = w.evaluate().to_dict()
     return hashlib.sha256(json.dumps({
         "passes": sorted(p.get("passes") or []),
         "failures": sorted(p.get("failures") or []),
@@ -54,95 +60,84 @@ def digest(w):
     }, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def gold_code(tid):
-    with AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full") as w:
-        gt = w.task.ground_truth
-        code = getattr(gt, "compiled_solution_code", None)
-        return str(code) if code else ""
-
-
 def run_gold(w, code):
     """Define the wrapper, then call it. Defining alone leaves the world untouched."""
-    with silenced():
-        w.execute(code)
-        return str(w.execute("solution(apis, requester)"))[-300:]
+    w.execute(code)
+    return str(w.execute("solution(apis, requester)"))[-300:]
 
 
-def measure(ids):
-    """The whole gate. Prints nothing; every result goes into F.
+def world(tid):
+    return AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full")
 
-    Runs entirely inside one `silenced()` block, world construction and
-    teardown included. Wrapping only the `evaluate()` calls was not enough:
-    reports still leaked, because AppWorld also reports on close, and the noise
-    buried the fidelity line under hundreds of lines of report.
+
+def gate_one(tid):
+    """One task. Two worlds: baseline and run one, then a fresh world for run two.
+
+    Returns a verdict. `no_effect` means the actions never moved the state, so
+    the two runs agreeing proves nothing; that is void, not a pass.
     """
-    probe_code = gold_code(ids[0])
-    with AppWorld(task_id=ids[0], experiment_name=EXP, ground_truth_mode="full") as w:
-        before = digest(w)
-        F["probe_output_tail"] = run_gold(w, probe_code)
-        F["gold_changes_state"] = digest(w) != before
-    F["gold_code_chars"] = len(probe_code)
-    if not F["gold_changes_state"]:
-        return
+    with world(tid) as w:
+        code = getattr(w.task.ground_truth, "compiled_solution_code", None)
+        if not code:
+            return "skipped"
+        code = str(code)
+        baseline = digest(w)
+        run_gold(w, code)
+        first = digest(w)
 
-    matched, diverged, no_effect, skipped, errored = 0, [], [], [], []
-    for tid in ids:
-        try:
-            code = gold_code(tid)
-            if not code:
-                skipped.append(tid)
-                continue
-            with AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full") as w:
-                baseline = digest(w)
-            ds = []
-            for _ in range(2):
-                with AppWorld(task_id=tid, experiment_name=EXP,
-                              ground_truth_mode="full") as w:
-                    run_gold(w, code)
-                    ds.append(digest(w))
-            if ds[0] == baseline:
-                no_effect.append(tid)
-            elif ds[0] == ds[1]:
-                matched += 1
-            else:
-                diverged.append(tid)
-        except Exception as e:
-            errored.append((tid, f"{type(e).__name__}: {e}"[:300]))
+    with world(tid) as w:
+        run_gold(w, code)
+        second = digest(w)
 
-    total = matched + len(diverged)
-    F["gate"] = {"total": total, "matched": matched, "diverged": diverged,
-                 "no_effect": no_effect, "skipped": skipped, "errored": errored[:5],
-                 "n_errored": len(errored),
-                 "rate": matched / total if total else 0.0,
-                 # a run whose tasks never moved is void, not passing
-                 "passes_gate": total > 0 and matched == total and not no_effect}
+    if first == baseline:
+        return "no_effect"
+    return "matched" if first == second else "diverged"
 
 
 ids = list(load_task_ids("train"))[:N]
-try:
-    with silenced():
-        measure(ids)
-except Exception as e:
-    F["fatal"] = f"{type(e).__name__}: {e}"[:600]
+buckets = {k: [] for k in ("matched", "diverged", "no_effect", "skipped", "errored")}
+F["errors"] = []
 
-# --- everything below is the only output this cell produces ----------------
-json.dump(F, open("phase1_gate.json", "w"), indent=2, default=str)
+print(f"gate over {len(ids)} tasks, two worlds each\n")
+for index, tid in enumerate(ids, start=1):
+    started = time.time()
+    try:
+        with silenced():
+            verdict = gate_one(tid)
+    except Exception as exc:
+        verdict = "errored"
+        F["errors"].append([tid, f"{type(exc).__name__}: {exc}"[:300]])
+    buckets[verdict].append(tid)
+    print(f"[{index:2}/{len(ids)}] {tid:<14} {verdict:<10} {time.time() - started:5.1f}s")
 
-print(f"gold solution: {F.get('gold_code_chars')} chars, "
-      f"changes state: {F.get('gold_changes_state')}")
-if F.get("fatal"):
-    print("FATAL:", F["fatal"])
-elif not F.get("gold_changes_state"):
-    print("\n!! the gold solution still did not move the state. the gate is void.")
-    print("   do not read anything into a fidelity number.")
+    total = len(buckets["matched"]) + len(buckets["diverged"])
+    # counts are n_-prefixed and the bare names hold task id lists, so the
+    # spread below cannot silently turn a headline count into a list
+    F["gate"] = {
+        **buckets,
+        "total": total,
+        "n_matched": len(buckets["matched"]),
+        "rate": len(buckets["matched"]) / total if total else 0.0,
+        # a run whose tasks never moved is void, not passing
+        "passes_gate": (total == len(ids) and not buckets["diverged"]
+                        and not buckets["no_effect"] and not buckets["errored"]),
+    }
+    json.dump(F, open(RESULT, "w"), indent=2, default=str)  # crash-safe
+
+g = F["gate"]
+print(f"\nfidelity {g['n_matched']}/{g['total']}"
+      f"   no_effect={len(g['no_effect'])}"
+      f"   skipped={len(g['skipped'])}"
+      f"   errored={len(g['errored'])}")
+if F["errors"]:
+    print("first errors:", F["errors"][:3])
+if g["no_effect"]:
+    print("VOID - those tasks never moved the state; the action source is still wrong.")
+elif g["passes_gate"]:
+    print("GATE PASSED - Phase 3a permitted.")
 else:
-    g = F["gate"]
-    print(f"fidelity {g['matched']}/{g['total']}  no_effect={len(g['no_effect'])}"
-          f"  skipped={len(g['skipped'])}  errored={g['n_errored']}")
-    if g["errored"]:
-        print("first errors:", g["errored"][:3])
-    print("GATE PASSED - Phase 3a permitted." if g["passes_gate"]
-          else "GATE NOT PASSED - do not proceed to causal analysis.")
+    print("GATE NOT PASSED - do not proceed to causal analysis.")
 
-print("\n--- paste this back ---")
-print(json.dumps(F, indent=2, default=str)[:2500])
+print(f"\nwrote {RESULT}")
+print("--- paste this back ---")
+print(json.dumps(F, indent=2, default=str)[:2000])
