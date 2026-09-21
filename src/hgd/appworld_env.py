@@ -98,6 +98,18 @@ def _sha256(payload: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _sorted_outcomes(items: Any) -> list[str]:
+    """Canonical, sortable form of a pass or fail vector.
+
+    Entries are not always strings. Once a task completes, AppWorld returns
+    dicts, and ``sorted`` raises ``TypeError: '<' not supported between
+    instances of 'dict' and 'dict'``. Serialising each entry first gives a
+    total order that holds for either shape, and keeps ordering from
+    masquerading as a state difference.
+    """
+    return sorted(json.dumps(item, sort_keys=True, default=str) for item in (items or []))
+
+
 def evaluation_digest(world: _World) -> str:
     """Digest the unit-test outcome vector.
 
@@ -113,8 +125,8 @@ def evaluation_digest(world: _World) -> str:
     with _silenced():
         payload = world.evaluate().to_dict()
     normalised = {
-        "passes": sorted(payload.get("passes") or []),
-        "failures": sorted(payload.get("failures") or []),
+        "passes": _sorted_outcomes(payload.get("passes")),
+        "failures": _sorted_outcomes(payload.get("failures")),
         "success": payload.get("success"),
         "num_tests": payload.get("num_tests"),
     }

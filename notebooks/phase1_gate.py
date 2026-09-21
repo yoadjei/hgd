@@ -56,6 +56,16 @@ findings: dict[str, object] = {}
 # digests, duplicated from hgd.appworld_env and kept in sync by a test
 # ---------------------------------------------------------------------------
 
+def _sorted_outcomes(items) -> list[str]:
+    """Canonical, sortable form of a pass or fail vector.
+
+    Entries are not always strings. Once a task completes AppWorld returns
+    dicts, and `sorted` raises "'<' not supported between instances of 'dict'
+    and 'dict'". Serialising each entry first orders either shape.
+    """
+    return sorted(json.dumps(item, sort_keys=True, default=str) for item in (items or []))
+
+
 def evaluation_digest(world) -> str:
     """Digest the unit-test outcome vector.
 
@@ -70,8 +80,8 @@ def evaluation_digest(world) -> str:
     """
     payload = world.evaluate().to_dict()
     normalised = {
-        "passes": sorted(payload.get("passes") or []),
-        "failures": sorted(payload.get("failures") or []),
+        "passes": _sorted_outcomes(payload.get("passes")),
+        "failures": _sorted_outcomes(payload.get("failures")),
         "success": payload.get("success"),
         "num_tests": payload.get("num_tests"),
     }

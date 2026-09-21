@@ -47,6 +47,10 @@ PAYLOADS = [
     {"success": True, "passes": ["a", "b"], "failures": []},
     {"success": False, "passes": [], "failures": ["x", "y", "z"]},
     {"success": False},
+    # dict entries, which is what a completed task returns. sorting these raised
+    # TypeError and killed the gate on the first task of every run.
+    {"success": True, "passes": [{"name": "answers match", "score": 1}], "failures": []},
+    {"success": False, "passes": [{"name": "a"}], "failures": [{"name": "b", "why": "x"}]},
 ]
 
 

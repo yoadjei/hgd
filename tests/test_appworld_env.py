@@ -210,6 +210,46 @@ def test_digest_reads_the_failure_vector_not_a_misspelled_key(env):
     assert one != other
 
 
+def test_digest_handles_dict_outcome_entries(env):
+    """Regression: the gate died with "'<' not supported between dicts".
+
+    The pass and fail vectors are not always lists of strings. Once a task
+    completes AppWorld returns dicts, and sorting them raises, so every real
+    run would have crashed at the third digest of the first task.
+    """
+    env.reset("train/task_1", seed=0)
+    world = env.world
+
+    world._passes = [{"name": "answers match", "score": 1}]
+    world._fails = [{"name": "no model changes", "score": 0}]
+
+    assert evaluation_digest(world) == evaluation_digest(world)
+
+
+def test_dict_outcome_order_is_still_ignored(env):
+    """Two states differing only in entry order remain identical."""
+    env.reset("train/task_1", seed=0)
+    world = env.world
+    one, other = {"name": "a"}, {"name": "b"}
+
+    world._passes, world._fails = [one, other], []
+    forward = evaluation_digest(world)
+    world._passes = [other, one]
+
+    assert evaluation_digest(world) == forward
+
+
+def test_dict_outcomes_differing_in_content_still_separate(env):
+    env.reset("train/task_1", seed=0)
+    world = env.world
+
+    world._passes, world._fails = [{"name": "a"}], []
+    one = evaluation_digest(world)
+    world._passes = [{"name": "b"}]
+
+    assert evaluation_digest(world) != one
+
+
 def test_database_digest_tracks_the_bytes_on_disk(tmp_path):
     """The exhaustive alternative: any change to a database file is a divergence."""
     database = tmp_path / "apps" / "spotify.db"

@@ -66,11 +66,18 @@ def silenced():
                 stream.write = original
 
 
+def outcomes(items):
+    # entries are not always strings. once a task completes appworld returns
+    # dicts, and sorted() raises "'<' not supported between instances of 'dict'
+    # and 'dict'". serialising each entry first orders either shape.
+    return sorted(json.dumps(i, sort_keys=True, default=str) for i in (items or []))
+
+
 def digest(w):
     p = w.evaluate().to_dict()
     return hashlib.sha256(json.dumps({
-        "passes": sorted(p.get("passes") or []),
-        "failures": sorted(p.get("failures") or []),
+        "passes": outcomes(p.get("passes")),
+        "failures": outcomes(p.get("failures")),
         "success": p.get("success"),
         "num_tests": p.get("num_tests"),
     }, sort_keys=True, default=str).encode()).hexdigest()
