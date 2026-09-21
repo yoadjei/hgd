@@ -14,7 +14,7 @@
 # task, printed nothing for minutes, and wrote its result only at the very end,
 # so an interrupted run left no evidence at all. this builds two worlds per
 # task, prints one line per task, and rewrites the json after every task.
-import contextlib, hashlib, io, json, os, sys, tempfile, time
+import contextlib, hashlib, io, itertools, json, os, sys, tempfile, time, traceback
 from appworld import AppWorld, load_task_ids
 
 N, EXP = 3, "phase1_gate_v4"
@@ -30,24 +30,40 @@ def silenced():
     # the descriptors are duplicated too. literal 1 and 2, because a notebook
     # stream has no usable fileno() and asking it raises, which silently
     # skipped the whole redirect in v3.
+    # three layers, because the first two were not enough. the package reports
+    # through a stream object captured before any redirect, so neutralising the
+    # object's own write is what actually catches it.
+    patched = []
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
-    saved = []
-    with tempfile.TemporaryFile() as sink:
         try:
-            for fd in (1, 2):
-                with contextlib.suppress(OSError, ValueError):
-                    saved.append((fd, os.dup(fd)))
-                    os.dup2(sink.fileno(), fd)
-            with contextlib.redirect_stdout(io.StringIO()), \
-                 contextlib.redirect_stderr(io.StringIO()):
-                yield
-        finally:
-            for fd, backup in saved:
-                with contextlib.suppress(OSError, ValueError):
-                    os.dup2(backup, fd)
-                    os.close(backup)
+            original = stream.write
+            stream.write = lambda *a, **k: None
+            patched.append((stream, original))
+        except Exception:
+            pass
+
+    saved = []
+    try:
+        with tempfile.TemporaryFile() as sink:
+            try:
+                for fd in (1, 2):
+                    with contextlib.suppress(OSError, ValueError):
+                        saved.append((fd, os.dup(fd)))
+                        os.dup2(sink.fileno(), fd)
+                with contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    yield
+            finally:
+                for fd, backup in saved:
+                    with contextlib.suppress(OSError, ValueError):
+                        os.dup2(backup, fd)
+                        os.close(backup)
+    finally:
+        for stream, original in patched:
+            with contextlib.suppress(Exception):
+                stream.write = original
 
 
 def digest(w):
@@ -66,8 +82,21 @@ def run_gold(w, code):
     return str(w.execute("solution(apis, requester)"))[-300:]
 
 
+_sequence = itertools.count()
+
+
 def world(tid):
-    return AppWorld(task_id=tid, experiment_name=EXP, ground_truth_mode="full")
+    """A world with an experiment name of its own.
+
+    Every world gets a unique name. Reusing one across two runs of the same task
+    made the second construction raise, and it is also wrong on its own terms:
+    a determinism test must not let run two inherit run one's output directory.
+    """
+    return AppWorld(
+        task_id=tid,
+        experiment_name=f"{EXP}_{next(_sequence)}",
+        ground_truth_mode="full",
+    )
 
 
 def gate_one(tid):
@@ -100,15 +129,21 @@ F["errors"] = []
 
 print(f"gate over {len(ids)} tasks, two worlds each\n")
 for index, tid in enumerate(ids, start=1):
-    started = time.time()
+    started, detail = time.time(), ""
     try:
         with silenced():
             verdict = gate_one(tid)
     except Exception as exc:
         verdict = "errored"
-        F["errors"].append([tid, f"{type(exc).__name__}: {exc}"[:300]])
+        detail = f"{type(exc).__name__}: {exc}"[:200]
+        # the first failing task carries a full traceback; a summary printed
+        # only at the end is worthless when the cell output truncates
+        if not F["errors"]:
+            F["first_traceback"] = traceback.format_exc()[-2000:]
+        F["errors"].append([tid, detail])
     buckets[verdict].append(tid)
-    print(f"[{index:2}/{len(ids)}] {tid:<14} {verdict:<10} {time.time() - started:5.1f}s")
+    print(f"[{index:2}/{len(ids)}] {tid:<14} {verdict:<10} "
+          f"{time.time() - started:5.1f}s {detail}")
 
     total = len(buckets["matched"]) + len(buckets["diverged"])
     # counts are n_-prefixed and the bare names hold task id lists, so the
@@ -129,8 +164,9 @@ print(f"\nfidelity {g['n_matched']}/{g['total']}"
       f"   no_effect={len(g['no_effect'])}"
       f"   skipped={len(g['skipped'])}"
       f"   errored={len(g['errored'])}")
-if F["errors"]:
-    print("first errors:", F["errors"][:3])
+if F.get("first_traceback"):
+    print("\n--- first traceback ---")
+    print(F["first_traceback"])
 if g["no_effect"]:
     print("VOID - those tasks never moved the state; the action source is still wrong.")
 elif g["passes_gate"]:
