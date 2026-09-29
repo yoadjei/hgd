@@ -92,7 +92,8 @@ The probe did its job. Every one of these would have corrupted results silently.
 | # | Defect | Consequence if unfixed | Status |
 |---|---|---|---|
 | R7 | `compiled_solution_code` is a `def solution(apis, requester)` wrapper, not a script | `execute()` defines the function and never calls it, so the world never moves. The no-op guard caught it; without the guard the gate would have reported 20/20 a second time. | fixed — define then `solution(apis, requester)`; probe moved the task from 1/2 to 2/2 passing |
-| R9 | `_silenced()` did not suppress the real evaluation report | AppWorld reports through a stream captured before the redirect, so two nested `redirect_stdout` layers leaked thousands of lines. The adapter's test used a `print`-based fake, so it passed while the real package flooded. Called once per step, this buries an episode's own log. | fixed — duplicates descriptors 1 and 2 as well as redirecting the streams; regression test writes past `sys.stdout` via `os.write` |
+| R9 | `silenced()` did not suppress the real evaluation report | AppWorld reports through a stream captured before the redirect, so two nested `redirect_stdout` layers leaked thousands of lines. The adapter's test used a `print`-based fake, so it passed while the real package flooded. Called once per step, this buries an episode's own log. | fixed — neutralises the stream object's own `write`, duplicates descriptors 1 and 2, and redirects the streams; regression test writes past `sys.stdout` via `os.write` |
+| R10 | `evaluation_digest` sorted the pass and fail vectors directly | Entries are only strings until a task completes; afterwards they are dicts, and `sorted` raises `'<' not supported between instances of 'dict' and 'dict'`. **This sat in the adapter, which `state_hash` calls once per step, so every real episode would have crashed at its first completed task.** Every test fake returned strings, so nothing caught it. | fixed — each entry is serialised to canonical JSON before sorting; 3 regression tests plus dict cases in the shared payload set |
 | R8 | `num_solution_code_lines` is exactly 3 on all 90 train tasks | A constant cannot measure solution length. `HStarStrategy.SOLUTION_LINES` would set H\* = 3 for every task on held-out splits, where it is the *only* available strategy, making u meaningless exactly where `api_calls` is withheld. | fixed — prefers `num_compiled_solution_code_lines` (18–86, median 37), 2 regression tests |
 
 ### Built since
@@ -106,11 +107,15 @@ The probe did its job. Every one of these would have corrupted results silently.
 - [x] `vllm_client.py` — `Model` over the OpenAI-compatible API, injected transport, 16 tests.
       HTTP rather than in-process so the server batches concurrent episodes; that batching is
       what makes the budget feasible.
-- [ ] **RUN the gate** ← the actual acceptance test. Two attempts so far, both
-      void rather than failed. Run 1 executed `api_calls` (no-op literals); run 2
-      executed `compiled_solution_code` (a function definition, never called).
-      R7 is now fixed and v3 of the cell is ready. **Determinism remains
-      unmeasured until it runs.**
+- [x] Gate logic moved into the package → `src/hgd/gate.py`, 17 tests. It was two
+      drifting copies of a script; cloning the repo removed the reason for that,
+      and the copies had already diverged on the silencing and world-naming fixes.
+      `notebooks/phase1_gate.py` is now a thin runner.
+- [ ] **RUN the gate on 20 tasks** ← the actual acceptance test.
+      Smoke test on 3 tasks passed on 21 Sep 2026, all `matched`, ~4 s per task.
+      Three earlier attempts were void rather than failed, each from a different
+      wrong action source (R2, R7) or a crash in our own digest (R10).
+      **Determinism over the full set remains unmeasured until this runs.**
 - [ ] Rerun the gate on model-generated trajectories (gold solutions never hit error paths)
 - [ ] vLLM client implementing `Model` (not needed for the gate; needed for Phase 2 onward)
 - **Acceptance:** 100% replay fidelity on 20 real AppWorld trajectories.

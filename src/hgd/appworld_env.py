@@ -40,7 +40,7 @@ from hgd.horizon import HStarStrategy, ground_truth_field, intrinsic_horizon
 
 
 @contextlib.contextmanager
-def _silenced():
+def silenced():
     """Suppress AppWorld's evaluation report.
 
     `evaluate()` prints a full formatted test report every time it is called, and
@@ -94,6 +94,33 @@ class _World(Protocol):
     def close(self) -> None: ...
 
 
+# the gold solution is a `def solution(apis, requester)` wrapper, so executing
+# it only defines a function. this call is what actually runs it, and both names
+# are already bound in the shell.
+SOLUTION_INVOCATION = "solution(apis, requester)"
+
+
+def gold_solution_code(ground_truth: Any) -> str:
+    """The released gold solution for a task, as executable Python.
+
+    Source of corrected actions for the oracle-fix intervention, and of
+    realistic action traffic for the determinism gate.
+
+    Explicitly **not** ``api_calls``: that field holds HTTP record dicts such as
+    ``{'method': 'get', 'url': '/supervisor/profile', 'data': {}}``, which
+    ``execute()`` evaluates as dict literals, a silent no-op. The first gate run
+    used it, measured nothing, and would have reported total fidelity.
+    """
+    for name in ("compiled_solution_code", "solution_code"):
+        code = ground_truth_field(ground_truth, name)
+        if code:
+            return str(code)
+    raise ValueError(
+        "ground truth exposes no compiled_solution_code or solution_code; "
+        "gold solution is released for train/dev only"
+    )
+
+
 def _sha256(payload: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -122,7 +149,7 @@ def evaluation_digest(world: _World) -> str:
     difference. ``difficulty`` is excluded because it is a static property of the
     task, not of the state.
     """
-    with _silenced():
+    with silenced():
         payload = world.evaluate().to_dict()
     normalised = {
         "passes": _sorted_outcomes(payload.get("passes")),
@@ -203,30 +230,12 @@ class AppWorldEnvironment:
 
     def snapshot(self) -> dict[str, Any]:
         """Evaluation state, for checkpoint predicates and the oracle summary."""
-        with _silenced():
+        with silenced():
             return self.world.evaluate().to_dict()
 
     def gold_solution_code(self) -> str:
-        """The released gold solution, as executable Python.
-
-        Source of corrected actions for the oracle-fix intervention, and of
-        realistic action traffic for the determinism gate.
-
-        Explicitly **not** ``ground_truth.api_calls``: that field is a list of
-        HTTP record dicts such as ``{'method': 'get', 'url': '/supervisor/profile',
-        'data': {}}``, which ``execute()`` evaluates as dict literals — a silent
-        no-op. The first Phase 1 gate run used it and measured nothing while
-        reporting success.
-        """
-        ground_truth = self.world.task.ground_truth
-        for name in ("compiled_solution_code", "solution_code"):
-            code = ground_truth_field(ground_truth, name)
-            if code:
-                return str(code)
-        raise ValueError(
-            "ground truth exposes no compiled_solution_code or solution_code; "
-            "gold solution is released for train/dev only"
-        )
+        """The released gold solution for the active task."""
+        return gold_solution_code(self.world.task.ground_truth)
 
     def save_state(self) -> str:
         return self.world.save_state()
