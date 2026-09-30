@@ -33,12 +33,20 @@ Install `serve` only when you are about to serve a model. Nothing else needs it.
 ## Running things
 
 ```bash
-pytest -q                                   # 287 tests, no appworld needed
+pytest -q                                   # 320 tests, no appworld needed
 python experiments/phase2_validation.py     # estimator validation, ~1 min, cpu
+python notebooks/adapter_probe.py           # verify the adapter against real appworld
 python notebooks/phase1_gate.py --tasks 3   # determinism gate, smoke test
 python notebooks/phase1_gate.py             # determinism gate, 20 tasks
 python notebooks/hstar_census.py            # H* distribution and compute budget
 ```
+
+Run the probe before the gate. It is the only thing that drives
+`AppWorldEnvironment` against the real package, and it reports on the assumptions
+the pilot runner rests on — `execute()`'s return type, whether `task_completed()`
+flips, whether `save_state`/`load_state` restore exactly, and what the evaluation
+payload actually contains. Each check reports rather than raises, so one run
+answers all of them.
 
 The gate and the census need the benchmark and its data:
 
@@ -70,11 +78,14 @@ Restart the kernel. Do not re-run cell 1.
 ```python
 # cell 2
 %cd /kaggle/working/hgd
+!python notebooks/adapter_probe.py
 !python notebooks/phase1_gate.py --tasks 3
+!python notebooks/phase1_gate.py
 ```
 
-Drop `--tasks 3` for the full twenty-task gate. The result is written to
-`phase1_gate.json` after every task, so an interrupted run still leaves evidence.
+The result is written to `phase1_gate.json` after every task, so an interrupted
+run still leaves evidence. The probe writes `adapter_probe.json`; read its failures
+before trusting anything built on the adapter.
 
 For the GPU phase later, Kaggle gives two T4s. They are compute capability 7.5,
 so bfloat16 and FlashAttention-2 are both unavailable and `--dtype float16` is
