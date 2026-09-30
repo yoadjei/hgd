@@ -347,3 +347,52 @@ def test_probe_flags_a_snapshot_that_leaks_raw_entries(in_tmp, monkeypatch):
 
     assert "gold: snapshot() normalises passes and failures to names" in \
         failed_checks(report(in_tmp))
+
+
+def test_the_depth_check_accepts_whatever_baseline_the_world_establishes(in_tmp, monkeypatch):
+    """The false positive it shipped with: it asserted depth == 1 and failed on real
+    hardware at depth 2, because a live world holds its own freeze plus the one its
+    Requester starts. The invariant is no drift, not a number I guessed."""
+
+    class TwoFreezes(ProbeWorld):
+        def __init__(self, task_id, **kwargs):
+            super().__init__(task_id, **kwargs)
+            self._extra = freeze_time(TASK_DATETIME)
+            self._extra.start()
+
+        def close(self):
+            self._extra.stop()
+            super().close()
+
+    probe = load_probe(monkeypatch, TwoFreezes)
+
+    probe.main("train")
+
+    assert "gold: evaluating does not leak a time freeze" not in \
+        failed_checks(report(in_tmp))
+
+
+def test_the_depth_check_still_catches_a_freeze_leaked_while_evaluating(in_tmp, monkeypatch):
+    """It has to keep working, or removing the magic number removed the guard."""
+
+    class LeaksOnEvaluate(ProbeWorld):
+        _leaked: list = []
+
+        def evaluate(self):
+            if not self._leaked:
+                extra = freeze_time(TASK_DATETIME)
+                extra.start()
+                self._leaked.append(extra)
+            return super().evaluate()
+
+        def close(self):
+            while self._leaked:
+                self._leaked.pop().stop()
+            super().close()
+
+    probe = load_probe(monkeypatch, LeaksOnEvaluate)
+
+    probe.main("train")
+
+    assert "gold: evaluating does not leak a time freeze" in \
+        failed_checks(report(in_tmp))

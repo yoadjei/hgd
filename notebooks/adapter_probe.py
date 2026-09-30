@@ -128,6 +128,14 @@ def scenario_execute(env: AppWorldEnvironment) -> None:
 
 
 def scenario_gold_solution(env: AppWorldEnvironment) -> None:
+    # measured, not assumed. an earlier version asserted depth == 1 and failed on
+    # real hardware at depth 2, because a live world holds its own freeze plus the
+    # one its Requester starts (environment.py builds the requester through
+    # ApiCollection.load, and requester.py starts a freeze when given a datetime).
+    # the invariant is that the depth does not drift, not that it equals a number
+    # i guessed.
+    depth_at_start = freezer_depth()
+
     def digest_moves() -> str:
         before = env.state_hash()
         run_gold_solution(env)
@@ -156,18 +164,18 @@ def scenario_gold_solution(env: AppWorldEnvironment) -> None:
     # starts a time freezer and stops it with no try/finally, so one failed
     # evaluation leaks a freeze permanently and every later task runs on a
     # corrupted clock. this scenario has evaluated several times by now.
-    def freezer_stack_is_balanced() -> str:
+    def freezer_stack_has_not_drifted() -> str:
         depth = freezer_depth()
-        if depth is None:
+        if depth is None or depth_at_start is None:
             raise AssertionError("cannot read freezegun's freeze stack")
-        assert depth == 1, (
-            f"{depth} freezes active, expected exactly the task's one; "
-            "a leaked freeze means timestamps stop being reproducible"
+        assert depth == depth_at_start, (
+            f"{depth} freezes active, {depth_at_start} at the start of this "
+            "scenario; a leaked freeze means timestamps stop being reproducible"
         )
-        return f"{depth} freeze active, the task's own"
+        return f"{depth} freezes, unchanged across evaluation"
 
-    check("gold: exactly one time freeze is active after evaluating",
-          freezer_stack_is_balanced)
+    check("gold: evaluating does not leak a time freeze",
+          freezer_stack_has_not_drifted)
 
 
 def scenario_completion_flip(env: AppWorldEnvironment) -> None:
@@ -203,13 +211,19 @@ def scenario_double_complete(env: AppWorldEnvironment) -> None:
     assumed. On a fresh world with no load_state it should pass; a failure here
     would mean P_obs is not a property of the trajectory.
     """
+    def failing_tests() -> list[str]:
+        return sorted(env.snapshot().get("failures") or [])
+
     def unchanged_by_a_second_call() -> dict[str, Any]:
         run_gold_solution(env)
-        before = outcome_views(env)
+        before, before_failures = outcome_views(env), failing_tests()
         with silenced():
             env.execute(COMPLETE_TASK)
-        after = outcome_views(env)
-        assert before == after, f"evaluation changed: {before} -> {after}"
+        after, after_failures = outcome_views(env), failing_tests()
+        assert before == after, (
+            f"evaluation changed: {before} -> {after}; failing tests went "
+            f"{before_failures} -> {after_failures}"
+        )
         return {"before": before, "after": after}
 
     check("double: a second complete_task() leaves the evaluation alone",

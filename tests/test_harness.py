@@ -276,3 +276,59 @@ def test_a_harness_trajectory_passes_the_replay_fidelity_gate(three_step_model, 
 
     assert result.matches
     assert result.diverged_at is None
+
+
+# --- completion is not idempotent ------------------------------------------
+# measured against appworld 0.1.3.post1 on 2026-09-30, on a fresh world with the
+# clock frozen: running the gold solution gave task_success True and pass fraction
+# 1.0, and one further apis.supervisor.complete_task() dropped them to False and
+# 0.5. one of the task's two unit tests flips. so a redundant completion destroys
+# P_obs, and the episode loop is what has to stop it happening.
+
+
+class CompletingEnvironment(DictEnvironment):
+    """Reports completion once the supervisor call has run, as appworld does."""
+
+    def __init__(self, complete_from_the_start: bool = False):
+        super().__init__()
+        self.completed = complete_from_the_start
+        self.executed: list[str] = []
+
+    def execute(self, action: str) -> str:
+        self.executed.append(action)
+        if "complete_task" in action:
+            self.completed = True
+        return "ok"
+
+    def task_completed(self) -> bool:
+        return self.completed
+
+
+def test_only_one_completion_is_executed_per_episode(config):
+    """A second complete_task() would turn a solved task into a failed one, so the
+    loop must stop at the first completion the environment reports."""
+    model = ScriptedModel([code("apis.supervisor.complete_task()")] * 3)
+    env = CompletingEnvironment()
+
+    records = run_episode(
+        task_id="t1", model=model, env=env, seed=0, h_star=4, config=config,
+    )
+
+    assert env.executed == ["apis.supervisor.complete_task()"]
+    assert len(records) == 1
+
+
+def test_an_episode_refuses_to_start_from_an_already_complete_task(config):
+    """Branching and replay compose into this: replay a prefix that already
+    completed, then continue generating. The first action would be a second
+    completion, which silently halves the score. An empty log returned quietly
+    would be worse — it would look like a model that said nothing."""
+    env = CompletingEnvironment(complete_from_the_start=True)
+
+    with pytest.raises(ValueError, match="already reports completion"):
+        run_episode(
+            task_id="t1", model=ScriptedModel([code("store(a, 1)")]),
+            env=env, seed=0, h_star=4, config=config,
+        )
+
+    assert env.executed == []

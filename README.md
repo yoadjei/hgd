@@ -144,8 +144,20 @@ clock had already been unfrozen.
 the world even when appworld's teardown raises, and records the failure on
 `teardown_errors` rather than swallowing it. `reset()` closes before constructing,
 which is load-bearing: `initialize()` also calls `close_all()`, so two live worlds
-leave the first unable to close. `tasks/todo.md` has the defect table; it is worth
-reading before trusting any result from this repository.
+leave the first unable to close.
+
+**Completion is not idempotent**, and this one is independent of the clock. Measured
+on 2026-09-30 on a fresh world with the freeze verified: running the gold solution
+gives `task_success` true and pass fraction 1.0, and one further
+`apis.supervisor.complete_task()` drops them to false and 0.5. One of the task's two
+unit tests flips. A redundant completion therefore destroys P_obs, so the episode
+loop stops at the first completion the environment reports, and `run_episode`
+refuses to start from a task that already reports completion — the way to reach that
+state is to branch from a replayed prefix that already finished. Any runner that
+consumes `oracle_fix`'s `forced_action` inherits the same constraint.
+
+`tasks/todo.md` has the defect table; it is worth reading before trusting any result
+from this repository.
 
 ## A note on the guards
 

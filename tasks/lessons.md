@@ -54,6 +54,32 @@ verbatim — so the reproduction cannot encode the same assumption the fix does.
 symptoms with one cause is the common case, and patching them separately leaves the
 cause in place.
 
+## 0c. A confirmed root cause is not a licence to explain the next symptom with it
+
+**What went wrong.** Two anomalies came back together: `close()` raising, and pass
+fraction dropping 1.0 to 0.5. Reading the source found a real defect that explained
+the first, and I used it to explain the second as well — the unfrozen clock must
+have made `complete_task()` write wall-clock timestamps that a validator rejected.
+It was coherent, it fitted every observation, and it was wrong. Measured on a fresh
+world with the clock verified frozen and no `load_state` anywhere, a second
+`complete_task()` still drops pass fraction to 0.5. Completion is simply not
+idempotent.
+
+An adversarial audit agreed with me, which made it worse. It reported the
+alternative as "not supported by the source" while also recording that appworld's
+supervisor app ships pre-compiled and could not be read. I took the conclusion and
+discounted the caveat that invalidated it.
+
+**Rule.** One confirmed cause explains one symptom. A second symptom needs its own
+measurement, especially when the shared explanation is elegant — elegance is what
+makes it persuasive, not what makes it true. When a source-reading exercise reports
+that the deciding code could not be read, that is an unanswered question, not a
+refutation. Keep the check that measures it and let it run.
+
+**Applied.** The probe kept measuring the double completion on a fresh world
+instead of asserting the tidy story, which is the only reason this was caught
+before the pilot ran on it.
+
 ## 1. Verify third-party APIs against the installed package, not the docs
 
 **What went wrong.** The AppWorld adapter was written from documentation. The
