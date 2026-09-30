@@ -72,5 +72,6 @@ if h_api:
           f"median {int(st.median([c['h_api'] for c in cheap]))}")
     print("ids:", [c["task_id"] for c in cheap[:10]], "...")
 
-json.dump(rows, open("hstar_census.json", "w"), indent=2, default=str)
+with open("hstar_census.json", "w", encoding="utf-8") as handle:
+    json.dump(rows, handle, indent=2, default=str)
 print("\nwrote hstar_census.json")

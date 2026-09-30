@@ -41,3 +41,13 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 96
+
+[tool.ruff.lint]
+# real errors only: undefined names, syntax, likely bugs. these were passed on the
+# command line until now, so `ruff check .` on a fresh clone used the defaults and
+# reported thirty style findings the code was never held to. pinning them here is
+# the point of a config file.
+select = ["F", "E9", "B"]
