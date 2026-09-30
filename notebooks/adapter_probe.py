@@ -82,6 +82,16 @@ def run_gold_solution(env: AppWorldEnvironment) -> None:
         env.execute(SOLUTION_INVOCATION)
 
 
+def freezer_depth() -> int | None:
+    """Active freezegun freezes, or None if that cannot be read."""
+    try:
+        from freezegun import api
+
+        return len(api.freeze_factories)
+    except Exception:
+        return None
+
+
 def outcome_views(env: AppWorldEnvironment) -> dict[str, Any]:
     state = env.snapshot()
     return {"task_success": task_success(state),
@@ -141,6 +151,23 @@ def scenario_gold_solution(env: AppWorldEnvironment) -> None:
           lambda: [r.to_dict() for r in evaluate_checkpoints(
               env, (Checkpoint("any_pass", stage=0,
                                predicate=lambda s: bool(s.get("passes"))),))])
+
+    # the check that would have caught the original bug. appworld's evaluator
+    # starts a time freezer and stops it with no try/finally, so one failed
+    # evaluation leaks a freeze permanently and every later task runs on a
+    # corrupted clock. this scenario has evaluated several times by now.
+    def freezer_stack_is_balanced() -> str:
+        depth = freezer_depth()
+        if depth is None:
+            raise AssertionError("cannot read freezegun's freeze stack")
+        assert depth == 1, (
+            f"{depth} freezes active, expected exactly the task's one; "
+            "a leaked freeze means timestamps stop being reproducible"
+        )
+        return f"{depth} freeze active, the task's own"
+
+    check("gold: exactly one time freeze is active after evaluating",
+          freezer_stack_is_balanced)
 
 
 def scenario_completion_flip(env: AppWorldEnvironment) -> None:

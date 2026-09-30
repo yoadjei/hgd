@@ -22,6 +22,7 @@ import types
 from pathlib import Path
 
 import pytest
+from freezegun import freeze_time
 
 PROBE_PATH = Path(__file__).resolve().parent.parent / "notebooks" / "adapter_probe.py"
 
@@ -73,6 +74,11 @@ class ProbeWorld:
         self._completed = False
         self._liked = False
         self._states: dict[str, tuple] = {}
+        # a real freeze, because appworld starts one per world and the probe now
+        # checks the freeze stack. a fake that skipped this could not exercise that
+        # check, which is the same hole that let three earlier defects ship.
+        self._freezer = freeze_time(TASK_DATETIME)
+        self._freezer.start()
 
     def execute(self, code: str) -> str:
         if "like_song" in code or "solution(apis" in code:
@@ -111,6 +117,26 @@ class ProbeWorld:
 
     def close(self) -> None:
         self.closed = True
+        self._freezer.stop()
+
+
+def freeze_depth() -> int:
+    from freezegun import api
+
+    return len(api.freeze_factories)
+
+
+@pytest.fixture(autouse=True)
+def no_leaked_freezes():
+    """A test that leaks a freeze leaves datetime patched for every later test.
+
+    This is the hygiene guard for the fakes above: without it a broken-close double
+    could poison the whole session and the failure would surface somewhere else
+    entirely.
+    """
+    before = freeze_depth()
+    yield
+    assert freeze_depth() == before, "this test leaked a freezegun freeze"
 
 
 def load_probe(monkeypatch, world_class):
@@ -185,9 +211,11 @@ def test_a_close_that_raises_is_attributed_to_its_sequence(in_tmp, monkeypatch):
             return super().save_state()
 
         def close(self):
+            # release the freeze first: the real package raises from inside its own
+            # teardown, but a double that leaks one corrupts every later test
+            super().close()
             if self._broken:
                 raise AttributeError(FREEZER_ERROR)
-            super().close()
 
     probe = load_probe(monkeypatch, BreaksCloseAfterSave)
 
@@ -239,6 +267,7 @@ def test_the_record_is_written_even_when_every_close_raises(in_tmp, monkeypatch)
 
     class AlwaysBreaksClose(ProbeWorld):
         def close(self):
+            super().close()
             raise AttributeError(FREEZER_ERROR)
 
     probe = load_probe(monkeypatch, AlwaysBreaksClose)

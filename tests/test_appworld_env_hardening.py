@@ -14,6 +14,7 @@ Two defects the Phase 1 probe exposed:
    first gate run measured nothing while reporting success.
 """
 
+import datetime
 import os
 import sys
 
@@ -386,3 +387,76 @@ def test_reset_closes_the_old_world_before_building_the_new_one():
     env.reset("train/t2", seed=0)
 
     assert events == ["build train/t1", "close train/t1", "build train/t2"]
+
+
+# --- the evaluator leaks a freeze on any exception --------------------------
+# appworld/evaluator.py starts a time freezer (line ~470) and stops it (~519) with
+# no try/finally, and raises explicitly in between on a db_version mismatch. an
+# exception anywhere in evaluation therefore leaks a freeze that is never popped.
+#
+# the leak is silent and permanent. the world's own close() then pops down to the
+# leaked frame instead of emptying the stack, so freezegun never restores
+# datetime, and the next task's freezer becomes a nested one that will raise when
+# it eventually empties the stack. one failed evaluate() corrupts every later task
+# in the process, which for the pilot is tens of thousands of calls.
+
+
+class LeakyEvaluationWorld:
+    """Evaluates by starting a freeze and then failing, exactly as appworld does."""
+
+    def __init__(self, task_id, **kwargs):
+        self.task_id = task_id
+        self.kwargs = kwargs
+        self.task = None
+        self.closed = False
+        self.leaked: list = []
+
+    def evaluate(self):
+        from freezegun import api
+
+        freezer = api._freeze_time(
+            datetime.datetime(2023, 5, 12, 9, 0, 0), tz_offset=0, ignore=[],
+            tick=False, as_arg=False, as_kwarg="", auto_tick_seconds=0,
+            real_asyncio=False,
+        )
+        freezer.start()
+        self.leaked.append(freezer)
+        raise RuntimeError("task was generated with a different db_version")
+
+    def close(self):
+        self.closed = True
+
+
+def _freeze_depth() -> int:
+    from freezegun import api
+
+    return len(api.freeze_factories)
+
+
+def test_a_leaked_time_freeze_during_evaluation_is_refused(monkeypatch):
+    """The guard that keeps a corrupted clock from being written to thousands of
+    rows. Detection, not repair: freezegun's stack is not ours to rewrite, and a
+    run that stops is worth far more than one that silently records wall-clock
+    timestamps as if they were reproducible."""
+    world = LeakyEvaluationWorld("train/t1")
+    depth_before = _freeze_depth()
+
+    try:
+        with pytest.raises(RuntimeError, match="freezegun"):
+            evaluation_digest(world)
+    finally:
+        for freezer in world.leaked:
+            freezer.stop()
+
+    assert _freeze_depth() == depth_before
+
+
+def test_a_clean_evaluation_leaves_the_freezer_stack_alone(env):
+    """The guard must not fire on the normal path, or it is worse than no guard."""
+    env.reset("train/t1", seed=0)
+    depth_before = _freeze_depth()
+
+    env.state_hash()
+    env.snapshot()
+
+    assert _freeze_depth() == depth_before

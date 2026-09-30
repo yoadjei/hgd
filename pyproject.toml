@@ -29,6 +29,10 @@ stats = [
 ]
 dev = [
     "pytest>=8",
+    # appworld brings this transitively; declared here so the freezer-leak guard in
+    # appworld_env is exercised against the real library rather than a stand-in. a
+    # guard tested only against a mock of the thing it guards is not tested.
+    "freezegun>=1.5",
 ]
 
 [build-system]

@@ -174,6 +174,55 @@ def _sorted_outcomes(items: Any) -> list[str]:
     return sorted(json.dumps(item, sort_keys=True, default=str) for item in (items or []))
 
 
+def _freezer_depth() -> int | None:
+    """How many freezegun freezes are active, or None if that cannot be read.
+
+    Reaching into a third-party global is not something to do lightly, but the
+    alternative is worse. See ``_evaluate``.
+    """
+    try:
+        from freezegun import api
+
+        return len(api.freeze_factories)
+    except Exception:  # pragma: no cover - freezegun absent or internals moved
+        return None
+
+
+def _evaluate(world: _World) -> dict[str, Any]:
+    """Evaluate quietly, and refuse to continue if the time freezer leaked.
+
+    appworld's evaluator starts a time freezer and stops it with no ``try``/
+    ``finally`` (``evaluator.py`` around lines 470 and 519) and raises explicitly
+    in between on a ``db_version`` mismatch. Any exception during evaluation
+    therefore leaks a freeze that is never popped, and the leak is silent and
+    permanent: the world's own ``close()`` then pops down to the leaked frame
+    instead of emptying the stack, so freezegun never restores ``datetime``, and
+    the next task's freezer becomes a nested one that raises when it finally does
+    empty the stack. One failed evaluation corrupts every later task in the
+    process.
+
+    This detects rather than repairs. freezegun's stack is not ours to rewrite,
+    and the pilot calls this tens of thousands of times: a run that stops is worth
+    much more than one that keeps writing wall-clock timestamps as though they
+    were reproducible.
+    """
+    before = _freezer_depth()
+    try:
+        with silenced():
+            return dict(world.evaluate().to_dict())
+    finally:
+        after = _freezer_depth()
+        if before is not None and after is not None and after != before:
+            raise RuntimeError(
+                f"appworld's evaluate() left the freezegun freeze stack at {after}, "
+                f"not {before}. its evaluator starts a time freezer and stops it "
+                "with no try/finally, so an exception inside evaluation leaks the "
+                "freeze permanently: time stops being restored and every later task "
+                "in this process runs on a corrupted clock. stopping here rather "
+                "than recording timestamps that cannot be reproduced."
+            )
+
+
 def evaluation_digest(world: _World) -> str:
     """Digest the unit-test outcome vector.
 
@@ -186,8 +235,7 @@ def evaluation_digest(world: _World) -> str:
     difference. ``difficulty`` is excluded because it is a static property of the
     task, not of the state.
     """
-    with silenced():
-        payload = world.evaluate().to_dict()
+    payload = _evaluate(world)
     normalised = {
         "passes": _sorted_outcomes(payload.get("passes")),
         "failures": _sorted_outcomes(payload.get("failures")),
@@ -285,8 +333,7 @@ class AppWorldEnvironment:
         Predicates are the tier-2 label source, so that False would move mass
         between competing risks with nothing looking wrong.
         """
-        with silenced():
-            payload = dict(self.world.evaluate().to_dict())
+        payload = _evaluate(self.world)
         for key in ("passes", "failures"):
             if key in payload:
                 payload[key] = [outcome_name(entry) for entry in (payload[key] or [])]
