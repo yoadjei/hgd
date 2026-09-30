@@ -195,9 +195,13 @@ def scenario_double_complete(env: AppWorldEnvironment) -> None:
     """Does completing an already-complete task change the evaluation?
 
     The first real run measured pass_fraction 1.0 after the gold solution and 0.5
-    later, with a second complete_task() in between. If that is the cause, a model
-    that calls complete_task() twice scores itself down and P_obs stops being a
-    property of the trajectory.
+    later, with a second complete_task() in between. The appworld source does not
+    support that reading: nothing in the evaluation framework counts completion
+    calls, and the drop is explained by the clock having been unfrozen by the
+    load_state() earlier in that run. The supervisor app ships pre-compiled, so the
+    source cannot rule it out entirely, which is why this is measured rather than
+    assumed. On a fresh world with no load_state it should pass; a failure here
+    would mean P_obs is not a property of the trajectory.
     """
     def unchanged_by_a_second_call() -> dict[str, Any]:
         run_gold_solution(env)

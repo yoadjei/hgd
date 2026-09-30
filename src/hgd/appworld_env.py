@@ -251,6 +251,13 @@ def database_digest(root: str | Path) -> Callable[[_World], str]:
     Exhaustive but brittle: any incidental byte difference counts as divergence.
     Supplied so the probe can quantify how much stricter it is than the
     behavioural digest before we commit to one.
+
+    It hashes timestamps along with everything else, so it is only sound while the
+    task clock stays frozen. Any event that unfreezes time — appworld's
+    ``load_state()`` being the known one, hence the refusal above — makes it report
+    divergence for two runs that are behaviourally identical, and kill condition C
+    would fire on an artefact. Choosing this digest means the frozen-clock check in
+    ``notebooks/adapter_probe.py`` stops being a nicety.
     """
     base = Path(root)
 
