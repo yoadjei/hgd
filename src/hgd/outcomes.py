@@ -23,15 +23,43 @@ is ready for either; the research question is not settled by an import.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
+
+_NAME_KEYS = ("name", "id", "description", "requirement", "test")
+
+
+def outcome_name(entry: Any) -> str:
+    """Stable identity of one pass or fail entry.
+
+    Entries change shape mid-episode. They are strings until a task completes and
+    dicts afterwards, verified against appworld 0.1.3.post1. Everything downstream
+    keys on identity, so the identity cannot be allowed to change with it:
+    ``checkpoint_vector`` used a raw entry as a dict key and raised
+    ``TypeError: unhashable type: 'dict'`` on the dict form, and a checkpoint
+    predicate written ``name in state["failures"]`` silently returned False.
+
+    The silent case is the dangerous one. Predicates are the tier-2 label source,
+    so a spurious False moves mass between the competing risks in the hazard model
+    without anything looking wrong.
+    """
+    if isinstance(entry, Mapping):
+        for key in _NAME_KEYS:
+            value = entry.get(key)
+            if value is not None:
+                return str(value)
+        # no recognised key: fall back to the whole entry, canonically, so two
+        # different entries never collide into one identity
+        return json.dumps(entry, sort_keys=True, default=str)
+    return str(entry)
 
 
 def _passes(payload: Mapping[str, Any]) -> list[str]:
-    return list(payload.get("passes") or [])
+    return [outcome_name(entry) for entry in (payload.get("passes") or [])]
 
 
 def _failures(payload: Mapping[str, Any]) -> list[str]:
-    return list(payload.get("failures") or [])
+    return [outcome_name(entry) for entry in (payload.get("failures") or [])]
 
 
 def task_success(payload: Mapping[str, Any]) -> bool:

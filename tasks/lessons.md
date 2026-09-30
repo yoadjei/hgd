@@ -3,6 +3,36 @@
 Corrections that changed how this codebase is built. Each entry is a rule that
 would have prevented the defect, applied to all later work.
 
+## 0. Do not ship defects. Reproduce first, then fix
+
+This one supersedes the rest, because it is the pattern the rest are instances of.
+
+**What went wrong.** Eight consecutive failures against the real package shipped
+with a fully green test suite, and four of the last five were defects introduced
+while fixing the previous one. Every one was found by a run on the user's machine
+rather than by a test here. The suite stayed green because **every test double
+encoded the same wrong assumption as the code it tested**, so no test was capable
+of failing:
+
+| Real behaviour | What the double did instead | Bug it could not catch |
+|---|---|---|
+| pass/fail entries are dicts after completion | returned strings | three: `sorted()` raising in the adapter, `checkpoint_vector` raising on an unhashable key, and a checkpoint predicate silently returning False |
+| reporter holds the stream from before any redirect | called `print()` | every real report leaking through two redirect layers |
+| `execute()` installs a guard: `faulthandler.enable()`, read-only `open()` | no guard at all | a StringIO sink with no descriptor breaking every action |
+| a fresh install resolves extras atomically | never installed anything | `vllm`'s source build taking `appworld` down with it |
+
+**Rule.** A fix for an externally-observed failure starts with a local
+reproduction that fails. Build doubles from observed behaviour of the real system,
+never from the assumption the code makes. Before fixing, ask what the double would
+have to do for this bug to show, make it do that, and watch it fail first. When a
+fix rests on a theory, say so and design the test to falsify the theory. A green
+suite across a real failure is a defect in the suite, so fix the double too.
+
+**Applied.** The `faulthandler` and read-only `open()` failure was fixed against a
+fake that installs both, and the fix was confirmed to turn a failing reproduction
+green before it shipped. Two earlier silencing fixes shipped on theories and both
+were wrong.
+
 ## 1. Verify third-party APIs against the installed package, not the docs
 
 **What went wrong.** The AppWorld adapter was written from documentation. The

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from hgd.horizon import HStarStrategy, ground_truth_field, intrinsic_horizon
+from hgd.outcomes import outcome_name
 
 
 # opened once at import, on purpose, and never closed. AppWorld replaces ``open``
@@ -243,9 +244,20 @@ class AppWorldEnvironment:
         return self._digest(self.world)
 
     def snapshot(self) -> dict[str, Any]:
-        """Evaluation state, for checkpoint predicates and the oracle summary."""
+        """Evaluation state, for checkpoint predicates and the oracle summary.
+
+        The pass and fail vectors are normalised to names. Raw entries are strings
+        until a task completes and dicts afterwards, and a predicate written
+        ``name in state["failures"]`` silently returns False on the dict form.
+        Predicates are the tier-2 label source, so that False would move mass
+        between competing risks with nothing looking wrong.
+        """
         with silenced():
-            return self.world.evaluate().to_dict()
+            payload = dict(self.world.evaluate().to_dict())
+        for key in ("passes", "failures"):
+            if key in payload:
+                payload[key] = [outcome_name(entry) for entry in (payload[key] or [])]
+        return payload
 
     def gold_solution_code(self) -> str:
         """The released gold solution for the active task."""

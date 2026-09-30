@@ -21,7 +21,7 @@ assumed here.
 import pytest
 
 from hgd.checkpoints import first_unrecovered_error
-from hgd.outcomes import checkpoint_vector, pass_fraction, task_success
+from hgd.outcomes import checkpoint_vector, outcome_name, pass_fraction, task_success
 
 PASSING = {"success": True, "passes": ["a", "b", "c"], "failures": [],
            "num_tests": 3, "difficulty": 1}
@@ -29,6 +29,13 @@ PARTIAL = {"success": False, "passes": ["a"], "failures": ["b", "c"],
            "num_tests": 3, "difficulty": 1}
 FAILING = {"success": False, "passes": [], "failures": ["a", "b", "c"],
            "num_tests": 3, "difficulty": 1}
+
+# the shape the real package returns once a task has completed
+PARTIAL_AS_DICTS = {"success": False,
+                    "passes": [{"name": "a", "score": 1}],
+                    "failures": [{"name": "b", "score": 0},
+                                 {"name": "c", "score": 0}],
+                    "num_tests": 3, "difficulty": 1}
 
 
 # --- binary outcome --------------------------------------------------------
@@ -112,3 +119,43 @@ def test_checkpoint_vector_ignores_non_test_keys():
 
     assert "difficulty" not in vector
     assert "num_tests" not in vector
+
+
+# --- entries change shape mid-episode --------------------------------------
+
+
+def test_checkpoint_vector_handles_dict_entries():
+    """Regression: a dict entry used as a key raised TypeError: unhashable type.
+
+    Entries are strings until a task completes and dicts afterwards, so on the
+    real benchmark this crashed the moment the first task finished. Every fixture
+    here returned strings, so nothing caught it.
+    """
+    assert checkpoint_vector(PARTIAL_AS_DICTS) == {"a": True, "b": False, "c": False}
+
+
+def test_both_entry_shapes_agree_on_every_view():
+    """The two shapes are the same state, so no view may disagree about them."""
+    assert checkpoint_vector(PARTIAL_AS_DICTS) == checkpoint_vector(PARTIAL)
+    assert pass_fraction(PARTIAL_AS_DICTS) == pass_fraction(PARTIAL)
+    assert task_success(PARTIAL_AS_DICTS) == task_success(PARTIAL)
+
+
+def test_outcome_name_reads_a_string_entry_unchanged():
+    assert outcome_name("answers match") == "answers match"
+
+
+def test_outcome_name_prefers_a_recognised_key():
+    assert outcome_name({"name": "answers match", "score": 0}) == "answers match"
+
+
+def test_outcome_name_keeps_unrecognised_entries_distinct():
+    """A fallback that collapsed two entries into one identity would lose a test."""
+    one = outcome_name({"unexpected": "a"})
+    other = outcome_name({"unexpected": "b"})
+
+    assert one != other
+
+
+def test_outcome_name_is_stable_across_key_order():
+    assert outcome_name({"a": 1, "b": 2}) == outcome_name({"b": 2, "a": 1})

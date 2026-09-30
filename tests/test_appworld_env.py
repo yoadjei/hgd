@@ -44,19 +44,35 @@ class FakeEvaluation:
         return dict(self._payload)
 
 
-class FakeWorld:
-    """Implements the documented AppWorld surface, and nothing more."""
+def as_dict_entries(names):
+    """The shape the real package returns once a task has completed."""
+    return [{"name": name, "score": 1} for name in names]
 
-    def __init__(self, task_id, **kwargs):
+
+class FakeWorld:
+    """Implements the documented AppWorld surface, and nothing more.
+
+    ``outcome_shape`` decides whether the pass and fail vectors hold strings or
+    dicts. Both occur: the real package returns strings until a task completes and
+    dicts afterwards. Every adapter test runs under both, because a fake that only
+    ever returned strings is precisely why a ``sorted()`` crash on dict entries
+    shipped into the adapter and went unnoticed until a real run hit it.
+    """
+
+    def __init__(self, task_id, outcome_shape="strings", **kwargs):
         self.task_id = task_id
         self.kwargs = kwargs
         self.task = FakeTask()
         self.executed: list[str] = []
         self.closed = False
         self.completed = False
+        self._shape = outcome_shape
         self._passes = ["login_ok"]
         self._fails = ["song_liked"]
         self._states: dict[str, tuple] = {}
+
+    def _shaped(self, names):
+        return as_dict_entries(names) if self._shape == "dicts" else list(names)
 
     def execute(self, code):
         self.executed.append(code)
@@ -70,7 +86,7 @@ class FakeWorld:
         return self.completed
 
     def evaluate(self):
-        return FakeEvaluation(self._passes, self._fails)
+        return FakeEvaluation(self._shaped(self._passes), self._shaped(self._fails))
 
     def save_state(self):
         state_id = f"s{len(self._states)}"
@@ -84,10 +100,12 @@ class FakeWorld:
         self.closed = True
 
 
-@pytest.fixture
-def env():
+@pytest.fixture(params=["strings", "dicts"], ids=["string_outcomes", "dict_outcomes"])
+def env(request):
+    """The adapter, exercised against both outcome shapes the real package returns."""
+    shape = request.param
     return AppWorldEnvironment(
-        world_factory=lambda task_id, **kw: FakeWorld(task_id, **kw),
+        world_factory=lambda task_id, **kw: FakeWorld(task_id, outcome_shape=shape, **kw),
         state_digest=evaluation_digest,
         experiment_name="test_exp",
     )
@@ -192,7 +210,10 @@ def test_snapshot_exposes_evaluation_state_for_checkpoint_predicates(env):
 
     snapshot = env.snapshot()
 
+    # names, whichever shape the package returned. a predicate written this way is
+    # the point: on raw dict entries it silently returned False.
     assert "song_liked" in snapshot["failures"]
+    assert "login_ok" in snapshot["passes"]
 
 
 def test_digest_reads_the_failure_vector_not_a_misspelled_key(env):
