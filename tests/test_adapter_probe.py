@@ -14,6 +14,7 @@ twelve findings, because it wrote its record after the close.
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
 import sys
@@ -36,10 +37,15 @@ class ProbeGroundTruth:
         self.api_calls = [{"method": "get", "url": "/x", "data": {}}] * 4
 
 
+TASK_DATETIME = datetime.datetime(2023, 5, 12, 9, 0, 0)
+
+
 class ProbeTask:
     def __init__(self):
         self.instruction = "Like the song."
         self.ground_truth = ProbeGroundTruth()
+        # appworld freezes the shell clock to this, and determinism rests on it
+        self.datetime = TASK_DATETIME
 
 
 class ProbeEvaluation:
@@ -74,6 +80,9 @@ class ProbeWorld:
             self._completed = True
         if "complete_task" in code:
             self._completed = True
+        if "_dt.datetime.now()" in code:
+            # the shell clock, frozen to the task datetime as appworld freezes it
+            return TASK_DATETIME.isoformat() + "\n"
         return f"output of {code[:20]}"
 
     def task_completed(self) -> bool:
@@ -168,26 +177,61 @@ def test_a_close_that_raises_is_attributed_to_its_sequence(in_tmp, monkeypatch):
     save_state/load_state. It has to be pinned to that sequence, and every
     scenario around it has to keep reporting."""
 
-    class BreaksCloseAfterLoad(ProbeWorld):
+    class BreaksCloseAfterSave(ProbeWorld):
         _broken = False
 
-        def load_state(self, marker):
-            super().load_state(marker)
+        def save_state(self):
             self._broken = True
+            return super().save_state()
 
         def close(self):
             if self._broken:
                 raise AttributeError(FREEZER_ERROR)
             super().close()
 
-    probe = load_probe(monkeypatch, BreaksCloseAfterLoad)
+    probe = load_probe(monkeypatch, BreaksCloseAfterSave)
 
     exit_code = probe.main("train")
     payload = report(in_tmp)
 
     assert exit_code == 1
-    assert failed_checks(payload) == ["saveload: close() after this sequence"]
-    assert "fake_names" in payload["checks"][-1]["observed"]
+    assert failed_checks(payload) == ["markers: close() after this sequence"]
+    broken = next(row for row in payload["checks"]
+                  if row["check"] == "markers: close() after this sequence")
+    assert "fake_names" in broken["observed"]
+
+
+def test_the_probe_catches_a_load_state_that_stops_refusing(in_tmp, monkeypatch):
+    """The fix that must not silently regress. appworld's load_state() unfreezes the
+    world clock, so if the adapter ever delegates to it again the probe has to say
+    so rather than let a non-deterministic environment through."""
+    probe = load_probe(monkeypatch, ProbeWorld)
+    monkeypatch.setattr(probe.AppWorldEnvironment, "load_state",
+                        lambda self, state_id: self.world.load_state(state_id))
+
+    probe.main("train")
+
+    assert "markers: load_state() is refused rather than corrupting the clock" in \
+        failed_checks(report(in_tmp))
+
+
+def test_the_probe_catches_a_shell_clock_that_is_not_frozen(in_tmp, monkeypatch):
+    """Determinism rests on the clock being frozen to the task datetime. A shell
+    reading wall-clock time makes timestamps irreproducible, which no digest that
+    ignores them would ever reveal."""
+
+    class WallClockShell(ProbeWorld):
+        def execute(self, code):
+            if "_dt.datetime.now()" in code:
+                return "2026-09-30T20:22:24\n"
+            return super().execute(code)
+
+    probe = load_probe(monkeypatch, WallClockShell)
+
+    probe.main("train")
+
+    assert "clock: the shell clock is frozen to the task datetime" in \
+        failed_checks(report(in_tmp))
 
 
 def test_the_record_is_written_even_when_every_close_raises(in_tmp, monkeypatch):

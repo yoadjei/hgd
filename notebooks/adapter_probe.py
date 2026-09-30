@@ -185,29 +185,57 @@ def scenario_double_complete(env: AppWorldEnvironment) -> None:
           unchanged_by_a_second_call)
 
 
-def scenario_save_and_load(env: AppWorldEnvironment) -> None:
-    """The replay layer assumes a restore is exact. Branching at step k needs it.
+def scenario_state_markers(env: AppWorldEnvironment) -> None:
+    """Saving a checkpoint is fine; restoring from one is refused.
 
-    This is also the sequence the first real run died on: close() raised inside
-    appworld's time freezer afterwards, so this scenario's close check is the one
-    to read.
+    This is the sequence the first real run died on. appworld's ``load_state()``
+    calls ``AppWorld.close_all()``, which stops the task's time freezer, and
+    restarts nothing, so the world silently continues on wall-clock time and the
+    next ``close()`` double-stops the same freezegun instance. Reproduced locally
+    against real freezegun, so the probe does not poison a world to watch it again.
     """
-    def restores_exactly() -> str:
-        marker = env.save_state()
-        saved = env.state_hash()
-        with silenced():
-            env.execute(COMPLETE_TASK)
-        moved = env.state_hash()
-        env.load_state(marker)
-        restored = env.state_hash()
-        assert restored == saved, (
-            f"restore is not exact: saved {saved[:12]}, moved {moved[:12]}, "
-            f"restored {restored[:12]}"
-        )
-        return (f"marker {marker!r} ({type(marker).__name__}), "
-                f"moved to {moved[:12]}, restored exactly")
+    check("markers: save_state() returns a marker",
+          lambda: f"{env.save_state()!r}")
 
-    check("saveload: save_state()/load_state() restore exactly", restores_exactly)
+    def refuses_restore() -> str:
+        try:
+            env.load_state("0")
+        except RuntimeError as exc:
+            assert "replay" in str(exc), "the refusal must name the supported route"
+            return "refused, and it names replay as the alternative"
+        raise AssertionError(
+            "load_state() was not refused; it unfreezes the clock silently"
+        )
+
+    check("markers: load_state() is refused rather than corrupting the clock",
+          refuses_restore)
+
+
+def scenario_frozen_clock(env: AppWorldEnvironment) -> None:
+    """Is the shell clock actually frozen to the task's datetime?
+
+    Never verified, and determinism rests on it: appworld freezes time per task so
+    that two replays of the same actions write the same timestamps. If the shell
+    sees wall-clock time, the Phase 1 gate's 20/20 is an accident of a digest that
+    happens not to hash timestamps, and any stricter digest would fail.
+    """
+    def clock_is_frozen_to_the_task() -> str:
+        expected = getattr(env.world.task, "datetime", None)
+        if expected is None:
+            raise AssertionError("task exposes no datetime to compare against")
+        with silenced():
+            printed = env.execute(
+                "import datetime as _dt; print(_dt.datetime.now().isoformat())"
+            )
+        seen = (printed or "").strip().splitlines()[-1].strip()
+        assert seen.startswith(str(expected.year)), (
+            f"shell clock reads {seen!r}, task datetime is {expected!r}; "
+            "time is not frozen, so timestamps are not reproducible"
+        )
+        return f"shell {seen}, task {expected}"
+
+    check("clock: the shell clock is frozen to the task datetime",
+          clock_is_frozen_to_the_task)
 
 
 SCENARIOS: tuple[tuple[str, Callable[[AppWorldEnvironment], None]], ...] = (
@@ -216,7 +244,8 @@ SCENARIOS: tuple[tuple[str, Callable[[AppWorldEnvironment], None]], ...] = (
     ("gold", scenario_gold_solution),
     ("flip", scenario_completion_flip),
     ("double", scenario_double_complete),
-    ("saveload", scenario_save_and_load),
+    ("markers", scenario_state_markers),
+    ("clock", scenario_frozen_clock),
 )
 
 

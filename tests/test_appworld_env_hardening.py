@@ -233,3 +233,156 @@ def test_intrinsic_horizon_reads_the_object_ground_truth(env):
     env.reset("train/t1", seed=0)
 
     assert env.intrinsic_horizon() == 71
+
+
+# --- appworld's time freezer -----------------------------------------------
+# appworld 0.1.3.post1 keeps three independent freezer registries and stops them
+# without a shared ordering discipline. reproduced against real freezegun:
+#
+#   freeze_time.stop() (common/utils.py) guards on `self._freezer is not None`
+#   but never nulls it. AppWorld.close_all() (environment.py:789) calls
+#   time_freezer.stop() directly rather than unset_local_date_and_time(), so the
+#   freezer stays non-None. load_state() calls close_all() and restarts nothing,
+#   and initialize() calls close_all() too.
+#
+# two consequences, and the silent one is worse:
+#   - after load_state() the world's time is no longer frozen, so every timestamp
+#     written afterwards is wall-clock instead of the task's datetime;
+#   - the next close() stops the same freezegun instance twice, popping its global
+#     stack again, which raises IndexError or, when a nested freezer is left to
+#     empty the stack, AttributeError: no attribute 'fake_names'.
+
+
+class FreezerBreakingWorld:
+    """A world whose close() fails the way the real package's does.
+
+    Verified on kaggle: AttributeError out of appworld's own teardown, with the
+    world already unusable by then.
+    """
+
+    def __init__(self, task_id, **kwargs):
+        self.task_id = task_id
+        self.kwargs = kwargs
+        self.task = None
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        raise AttributeError("'_freeze_time' object has no attribute 'fake_names'")
+
+
+def test_load_state_is_refused_rather_than_silently_unfreezing_time():
+    """appworld's load_state() leaves the world running on wall-clock time.
+
+    Nothing warns. Timestamps written after it differ from the task's frozen
+    datetime, which breaks determinism — kill condition C — and the failure would
+    show up as an inexplicable unit-test failure much later.
+    """
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: NoisyWorld(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    with pytest.raises(RuntimeError, match="unfreez"):
+        env.load_state("0")
+
+
+def test_the_refusal_names_the_supported_alternative():
+    """A refusal that does not say what to do instead gets worked around."""
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: NoisyWorld(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    with pytest.raises(RuntimeError, match="replay"):
+        env.load_state("0")
+
+
+def test_a_failing_close_still_releases_the_world():
+    """Teardown raised on the real package. If the reference survives, the adapter
+    is wedged: every later reset() retries the same broken close and no further
+    task can run."""
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: FreezerBreakingWorld(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    with pytest.raises(AttributeError):
+        env.close()
+
+    # the world is gone even though close raised, so the adapter is reusable
+    with pytest.raises(RuntimeError, match="reset"):
+        env.execute("print(1)")
+
+
+def test_a_failing_close_is_recorded_not_swallowed():
+    """Swallowing it would hide freezegun corruption that poisons the next world's
+    clock. The runner needs to see it to decide whether to keep going."""
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: FreezerBreakingWorld(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    with pytest.raises(AttributeError):
+        env.close()
+
+    assert len(env.teardown_errors) == 1
+    assert "fake_names" in env.teardown_errors[0]
+
+
+def test_reset_survives_a_previous_world_that_cannot_close():
+    """The previous episode is already logged, so a broken teardown must not stop
+    the next task. It is still recorded."""
+    worlds = []
+
+    def factory(task_id, **kw):
+        world = FreezerBreakingWorld(task_id, **kw) if not worlds else NoisyWorld(task_id, **kw)
+        worlds.append(world)
+        return world
+
+    env = AppWorldEnvironment(
+        world_factory=factory,
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    env.reset("train/t2", seed=0)
+
+    assert env.world.task_id == "train/t2"
+    assert len(env.teardown_errors) == 1
+
+
+def test_reset_closes_the_old_world_before_building_the_new_one():
+    """Order matters and is not cosmetic. AppWorld.initialize() calls close_all(),
+    which stops every registered freezer without nulling it, so a second live world
+    poisons the first world's close. Two worlds must never overlap."""
+    events = []
+
+    class Recording:
+        def __init__(self, task_id, **kwargs):
+            self.task_id = task_id
+            self.kwargs = kwargs
+            events.append(f"build {task_id}")
+
+        def close(self):
+            events.append(f"close {self.task_id}")
+
+    env = AppWorldEnvironment(
+        world_factory=lambda task_id, **kw: Recording(task_id, **kw),
+        state_digest=evaluation_digest,
+        experiment_name="test_exp",
+    )
+    env.reset("train/t1", seed=0)
+
+    env.reset("train/t2", seed=0)
+
+    assert events == ["build train/t1", "close train/t1", "build train/t2"]

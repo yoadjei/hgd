@@ -125,13 +125,26 @@ The caveat worth carrying into the paper: fidelity is established under
 are equivalent *for our estimands*, but the digest cannot see collateral state the
 tests ignore. `database_digest` is the strict alternative and has not been run.
 
-Two adapter defects are open, both found by `notebooks/adapter_probe.py` and
-neither visible to the gate. `close()` raises inside appworld's freezegun time
-freezer after `save_state`/`load_state`, and the harness closes on every `reset()`,
-so a multi-task run would die at its second task. Separately, the evaluation
-appears to degrade when `complete_task()` is called on an already-complete task —
-pass fraction went 1.0 to 0.5 across a second call. The probe now measures both
-instead of inferring them. `tasks/todo.md` has the defect table; it is worth
+The adapter probe found two anomalies on real hardware, and both trace to one
+upstream defect in appworld 0.1.3.post1. `load_state()` calls
+`AppWorld.close_all()`, which stops the task's time freezer, and restarts nothing.
+So the world silently continues on wall-clock time, and the following `close()`
+stops the same freezegun instance twice. Reproduced locally against real freezegun;
+the mechanism is documented in `src/hgd/appworld_env.py`.
+
+The silent half is the dangerous one: unfrozen time makes timestamps
+irreproducible, which is precisely what kill condition C certifies against, and it
+would never show up in a digest that ignores timestamps. It also explains the
+second anomaly — pass fraction falling 1.0 to 0.5 — without needing a second
+defect, because the `complete_task()` call that appeared to cause it ran after the
+clock had already been unfrozen.
+
+`load_state` is therefore refused rather than delegated, and branching goes through
+`hgd.replay.replay_prefix`, which is the path the gate validated. `close()` releases
+the world even when appworld's teardown raises, and records the failure on
+`teardown_errors` rather than swallowing it. `reset()` closes before constructing,
+which is load-bearing: `initialize()` also calls `close_all()`, so two live worlds
+leave the first unable to close. `tasks/todo.md` has the defect table; it is worth
 reading before trusting any result from this repository.
 
 ## A note on the guards

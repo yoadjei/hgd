@@ -33,6 +33,27 @@ fake that installs both, and the fix was confirmed to turn a failing reproductio
 green before it shipped. Two earlier silencing fixes shipped on theories and both
 were wrong.
 
+## 0b. Read the dependency's source before theorising about its behaviour
+
+**What went wrong, nearly.** Two anomalies came back from a real run: `close()`
+raising inside appworld's time freezer, and pass fraction falling 1.0 to 0.5. The
+obvious move was to write a defensive `close()` and a guard against calling
+`complete_task()` twice. Both would have been wrong. Downloading the
+`appworld==0.1.3.post1` wheel and reading forty lines of it showed a single cause:
+`load_state()` calls `AppWorld.close_all()`, which stops the task's time freezer
+and restarts nothing, so the world silently continues on wall-clock time and the
+next `close()` double-stops the same freezegun instance. The score drop was a
+downstream symptom of the unfrozen clock, not a second defect. A guard against
+double completion would have been a fix for a symptom, hiding a determinism break.
+
+**Rule.** When a dependency misbehaves, read its source before designing the fix.
+`pip download --no-deps` plus unzip is cheaper than one wrong fix, and far cheaper
+than a fix that hides the real cause. Reproduce the mechanism locally against the
+dependency's real internals — here, real freezegun plus appworld's wrapper copied
+verbatim — so the reproduction cannot encode the same assumption the fix does. Two
+symptoms with one cause is the common case, and patching them separately leaves the
+cause in place.
+
 ## 1. Verify third-party APIs against the installed package, not the docs
 
 **What went wrong.** The AppWorld adapter was written from documentation. The

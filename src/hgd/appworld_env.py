@@ -22,6 +22,28 @@ between them empirically against the real package:
 Choosing between them is a real methodological decision, not a detail: too coarse
 and replay fidelity is overstated, too fine and kill condition C fires spuriously.
 The probe reports both.
+
+**On appworld's time freezer.** appworld 0.1.3.post1 keeps three independent
+freezer registries — per world (``AppWorld.id_to_time_freezer``), per requester
+(``Requester.time_freezers_or_ids``) and one inside ``evaluator.py`` — and stops
+them with no shared ordering discipline. Two facts combine badly, both reproduced
+against real freezegun:
+
+* ``freeze_time.stop()`` in ``common/utils.py`` guards on
+  ``self._freezer is not None`` but never nulls it, and
+  ``AppWorld.close_all()`` calls ``time_freezer.stop()`` directly instead of
+  ``unset_local_date_and_time()``, so the freezer stays non-None and can be
+  stopped twice.
+* freezegun's ``_freeze_time.start()`` returns early when a freeze is already
+  active, so a *nested* freezer never gets ``fake_names``, while ``stop()`` reads
+  ``fake_names`` only when it empties the global stack. Whichever freezer empties
+  the stack must therefore be the one that was outermost.
+
+``load_state()`` calls ``close_all()`` and restarts nothing, which leaves the
+world running on wall-clock time with no warning, and makes the following
+``close()`` a double stop. ``initialize()`` calls ``close_all()`` too, so two live
+worlds poison the first one's teardown. Hence two rules here: ``load_state`` is
+refused outright, and no two worlds are ever alive at once.
 """
 
 from __future__ import annotations
@@ -212,6 +234,9 @@ class AppWorldEnvironment:
         self._ground_truth_mode = ground_truth_mode
         self._h_star_strategy = h_star_strategy
         self._world: _World | None = None
+        # appworld's teardown can raise, see the freezer note above. a runner needs
+        # to see that rather than have it swallowed, so it is recorded here.
+        self.teardown_errors: list[str] = []
 
     @property
     def world(self) -> _World:
@@ -226,8 +251,16 @@ class AppWorldEnvironment:
         deterministic given the task, and the seed governs model sampling. Keeping
         it in the signature preserves one ``Environment`` protocol across the real
         and synthetic environments.
+
+        The previous world is closed *before* the next is built, and that ordering
+        is load-bearing: ``AppWorld.initialize()`` calls ``close_all()``, which
+        stops every registered time freezer without nulling it, so two live worlds
+        leave the first one unable to close. A teardown failure is recorded and
+        then tolerated, because the previous episode is already logged and the next
+        task still has to run.
         """
-        self.close()
+        with contextlib.suppress(Exception):
+            self.close()
         self._world = self._factory(
             task_id,
             experiment_name=self._experiment_name,
@@ -264,15 +297,55 @@ class AppWorldEnvironment:
         return gold_solution_code(self.world.task.ground_truth)
 
     def save_state(self) -> str:
+        """Write a checkpoint directory.
+
+        Kept, unlike ``load_state``: writing the checkpoint touches no freezer and
+        the directory is useful for post-hoc inspection. Restoring from it is the
+        part that corrupts the clock.
+        """
         return self.world.save_state()
 
     def load_state(self, state_id: str) -> None:
-        self.world.load_state(state_id)
+        """Refused. See the freezer note in the module docstring.
+
+        Not a delegation. appworld's ``load_state()`` calls ``AppWorld.close_all()``
+        and restarts no freezer, so the world silently continues on wall-clock time
+        and the next ``close()`` stops the same freezegun instance twice. The first
+        consequence is the dangerous one: it is invisible, and it makes the
+        environment non-deterministic, which is exactly what kill condition C
+        certifies against.
+        """
+        raise RuntimeError(
+            "appworld's load_state() unfreezes the world clock and does not restart "
+            "it: it calls AppWorld.close_all(), which stops the task's time freezer, "
+            "and restores no freezer afterwards. every timestamp written after it is "
+            "wall-clock rather than the task's frozen datetime, which breaks "
+            "determinism silently, and the next close() then double-stops the same "
+            "freezegun instance. branch by replay instead: hgd.replay.replay_prefix "
+            "re-executes a logged action prefix, and that is the path the phase 1 "
+            "gate validated at total fidelity."
+        )
 
     def intrinsic_horizon(self) -> int:
         return intrinsic_horizon(self.world.task.ground_truth, self._h_star_strategy)
 
     def close(self) -> None:
-        if self._world is not None:
-            self._world.close()
-            self._world = None
+        """Release the world, whether or not appworld's teardown succeeds.
+
+        The reference is dropped first, on purpose. appworld's ``close()`` can raise
+        out of its own time freezer, and a surviving reference would wedge the
+        adapter: every later ``reset()`` would retry the same broken close and no
+        further task could run.
+
+        The error is recorded and then re-raised rather than swallowed. Swallowing
+        it would hide freezegun corruption that silently poisons the next world's
+        clock, and a wrong clock is worse than a loud failure.
+        """
+        world, self._world = self._world, None
+        if world is None:
+            return
+        try:
+            world.close()
+        except Exception as exc:
+            self.teardown_errors.append(f"{type(exc).__name__}: {exc}")
+            raise

@@ -288,15 +288,22 @@ def test_database_digest_tracks_the_bytes_on_disk(tmp_path):
 # --- state save and restore ------------------------------------------------
 
 
-def test_saved_state_can_be_restored(env):
+def test_save_state_returns_a_marker(env):
+    """Writing a checkpoint is harmless; it touches no time freezer."""
+    env.reset("train/task_1", seed=0)
+
+    assert env.save_state() == "s0"
+
+
+def test_restoring_a_saved_state_is_refused(env):
+    """appworld's load_state() silently unfreezes the world clock, so the adapter
+    refuses it and branching goes through replay instead. The mechanism is in the
+    module docstring and the regressions are in test_appworld_env_hardening."""
     env.reset("train/task_1", seed=0)
     marker = env.save_state()
-    env.execute("apis.spotify.like_song(song_id=1)")
-    changed = env.state_hash()
 
-    env.load_state(marker)
-
-    assert env.state_hash() != changed
+    with pytest.raises(RuntimeError, match="unfreez"):
+        env.load_state(marker)
 
 
 # --- horizon ---------------------------------------------------------------
