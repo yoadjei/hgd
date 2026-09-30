@@ -26,59 +26,73 @@ The probe reports both.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import hashlib
-import io
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from hgd.horizon import HStarStrategy, ground_truth_field, intrinsic_horizon
 
 
+# opened once at import, on purpose, and never closed. AppWorld replaces ``open``
+# with a read-only version while it executes an action, so anything that opens a
+# file inside that window raises PermissionError; an earlier version used
+# tempfile.TemporaryFile() here and the guard turned a silencer into a crash.
+# ``dup`` and ``dup2`` are syscalls rather than opens, so reusing one descriptor
+# is safe where creating a file is not.
+try:
+    _NULL_STREAM: Any = open(os.devnull, "w", encoding="utf-8")
+    atexit.register(_NULL_STREAM.close)
+except OSError:  # pragma: no cover - a host with no null device
+    _NULL_STREAM = None
+
+
 @contextlib.contextmanager
 def silenced():
-    """Suppress AppWorld's evaluation report.
+    """Send writes to descriptors 1 and 2 to the null device.
 
     `evaluate()` prints a full formatted test report every time it is called, and
-    the adapter calls it for both `state_hash` and `snapshot` — at least once per
-    step. Unsuppressed, one episode buries its own log under thousands of lines,
-    and on a hosted notebook the I/O is a measurable slowdown.
+    the adapter calls it for both `state_hash` and `snapshot`, at least once per
+    step. Unsuppressed, one episode buries its own log under thousands of lines.
 
-    Redirected at the file descriptor rather than at ``sys.stdout``. AppWorld
-    reports through a console that captures the stream when it is constructed,
-    so a later ``redirect_stdout`` never sees the writes: the Phase 1 probe on
-    2026-09-20 had reports flood through two nested layers of it. Falls back to
-    the stream-level redirect where descriptors cannot be duplicated, which is
-    the case in some notebook kernels.
+    Both layers matter and both are descriptor-backed. Duplicating 1 and 2 catches
+    console and C-level writes; the stream redirect catches ordinary prints in a
+    kernel whose streams are not descriptor-backed. Literal 1 and 2 rather than
+    ``sys.stdout.fileno()``, because under pytest capture and in notebook kernels
+    the stream object has no usable descriptor and asking raises, which silently
+    skipped the redirect altogether.
+
+    The sink is a real file, never an ``io.StringIO``. AppWorld calls
+    ``faulthandler.enable()`` when it disables its safety guard, which needs a
+    genuine descriptor; redirecting to a StringIO made every ``execute()`` raise
+    ``io.UnsupportedOperation: fileno`` and errored the gate on every task.
     """
+    if _NULL_STREAM is None:
+        yield
+        return
+
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
 
     saved: list[tuple[int, int]] = []
-    with tempfile.TemporaryFile() as sink:
-        try:
-            # literal 1 and 2, not sys.stdout.fileno(): under pytest capture and
-            # in notebook kernels the stream object has no usable descriptor and
-            # asking it raises, which silently skipped the whole redirect.
-            for descriptor in (1, 2):
-                with contextlib.suppress(OSError, ValueError):
-                    saved.append((descriptor, os.dup(descriptor)))
-                    os.dup2(sink.fileno(), descriptor)
-            # both layers: the descriptors catch console and C-level writes, the
-            # stream redirect catches ordinary prints in kernels whose streams
-            # are not descriptor-backed.
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                yield
-        finally:
-            for descriptor, backup in saved:
-                with contextlib.suppress(OSError, ValueError):
-                    os.dup2(backup, descriptor)
-                    os.close(backup)
+    try:
+        for descriptor in (1, 2):
+            with contextlib.suppress(OSError, ValueError):
+                saved.append((descriptor, os.dup(descriptor)))
+                os.dup2(_NULL_STREAM.fileno(), descriptor)
+        with contextlib.redirect_stdout(_NULL_STREAM), \
+             contextlib.redirect_stderr(_NULL_STREAM):
+            yield
+    finally:
+        for descriptor, backup in saved:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(backup, descriptor)
+                os.close(backup)
 
 
 class _World(Protocol):

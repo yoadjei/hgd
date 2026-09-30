@@ -1,6 +1,17 @@
-# h* census: cpu only, no model, about 2 minutes for all 90 train tasks.
-# decides the compute budget before any gpu quota is spent, and whether the
-# audit's step limit of 3*h* is affordable at all.
+"""H* census: CPU only, no model, about two minutes for all 90 train tasks.
+
+Decides the compute budget before any GPU quota is spent, and whether the audit's
+step limit of 3*H* is affordable at all.
+
+Same setup as the gate. The bench extra only; vllm builds from source and nothing
+here calls a model.
+
+    !pip install -q -e ".[bench]"
+    !appworld install && appworld download data
+    # restart the kernel here: appworld downgrades pydantic
+    !python notebooks/hstar_census.py
+"""
+
 import json, statistics as st
 from appworld import AppWorld, load_task_ids
 

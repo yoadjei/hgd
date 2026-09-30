@@ -15,6 +15,7 @@ Two defects the Phase 1 probe exposed:
 """
 
 import os
+import sys
 
 import pytest
 
@@ -122,6 +123,50 @@ class FileDescriptorEvaluation:
     def to_dict(self):
         os.write(1, b"=" * 60 + b"\nOverall Stats: Num Passed Tests : 1\n")
         return dict(self._payload)
+
+
+def test_silenced_leaves_stderr_with_a_real_descriptor():
+    """Regression: redirecting to io.StringIO broke AppWorld's safety guard.
+
+    `execute()` calls `safety_guard.disable()`, which calls
+    `faulthandler.enable()`, and that needs a genuine descriptor. A StringIO has
+    none, so every action raised `io.UnsupportedOperation: fileno` and the gate
+    errored on every task while reporting a misleading PermissionError instead.
+    """
+    import faulthandler
+
+    from hgd.appworld_env import silenced
+
+    was_enabled = faulthandler.is_enabled()
+    try:
+        with silenced():
+            sys.stderr.fileno()
+            faulthandler.enable()
+    finally:
+        if not was_enabled:
+            faulthandler.disable()
+
+
+def test_silenced_opens_no_file_while_active(monkeypatch):
+    """Regression: a TemporaryFile inside the silencer hit AppWorld's guard.
+
+    While an action executes, AppWorld replaces `open` with a read-only version
+    that raises on any write. The silencer must not need to open anything, or it
+    masks the real failure with a PermissionError of its own.
+    """
+    import builtins
+    import io as io_module
+
+    from hgd.appworld_env import silenced
+
+    def forbidden(*args, **kwargs):
+        raise PermissionError("Writing to OS file system is disabled.")
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(io_module, "open", forbidden)
+
+    with silenced():
+        pass
 
 
 def test_report_written_past_sys_stdout_is_still_suppressed(capfd):

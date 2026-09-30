@@ -60,7 +60,7 @@ still loaded. `%cd` does not survive the restart, hence the repeat.
 # cell 1, accelerator off
 !git clone https://github.com/yoadjei/hgd.git /kaggle/working/hgd
 %cd /kaggle/working/hgd
-!pip install -q -e ".[bench,dev]"
+!pip install -q -e ".[bench,dev]"   # dev is only pytest, so you can verify the clone
 !appworld install
 !appworld download data
 ```

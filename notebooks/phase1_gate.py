@@ -40,9 +40,11 @@ def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT) -> int:
 
     @contextlib.contextmanager
     def open_world(task_id: str):
-        # silenced covers construction and teardown, not only evaluate(): the
-        # package reports at every one of them, and unsuppressed a single run
-        # buries its own result under hundreds of lines of test report.
+        # construction and teardown are silenced; executing an action is not.
+        # AppWorld installs a safety guard around execute() that replaces open()
+        # and calls faulthandler.enable(), and silencing across that window is
+        # how the gate previously errored on every task. evaluate() silences
+        # itself inside evaluation_digest, which is where the noise comes from.
         with silenced():
             world = AppWorld(
                 task_id=task_id,
@@ -50,8 +52,7 @@ def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT) -> int:
                 ground_truth_mode="full",
             )
         try:
-            with silenced():
-                yield world
+            yield world
         finally:
             with silenced():
                 world.close()
