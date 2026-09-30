@@ -137,7 +137,7 @@ def delta_for(params: dict, **arm) -> float:
 def main() -> int:
     findings: dict[str, object] = {"planted": PLANTED, "n_scenarios": N_SCENARIOS}
     print("=" * 72)
-    print("PHASE 2 — estimator validation against planted ground truth")
+    print("PHASE 2 estimator validation against planted ground truth")
     print("=" * 72)
 
     # --- horizon gap exists in the synthetic world -------------------------

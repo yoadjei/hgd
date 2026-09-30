@@ -1,4 +1,4 @@
-"""Phase 1 gate runner — kill condition C.
+"""Phase 1 gate runner, kill condition C.
 
 Thin wrapper over ``hgd.gate``, which holds the logic and the tests. No GPU:
 replay re-executes the released gold solutions with no model in the loop, so
