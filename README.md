@@ -16,37 +16,69 @@ released log reproduces the branch, attribute it to three mechanisms:
 
 ## Install
 
+The extras are deliberately not bundled. pip resolves an extra atomically, so
+pairing `appworld` with `vllm` means vLLM's source build failing takes `appworld`
+down with it, and the CPU-only gate cannot run at all. That happened.
+
 ```bash
 git clone https://github.com/yoadjei/hgd.git
 cd hgd
-pip install -e ".[dev]"        # analysis and replay, no GPU needed
-pip install -e ".[run]"        # adds appworld and vllm
+pip install -e ".[dev]"            # tests and analysis. numpy only, no compiler
+pip install -e ".[bench,dev]"      # adds appworld, for the gate and the census
+pip install -e ".[serve]"          # adds vllm. GPU inference only, builds from source
 ```
 
-The core install is numpy only, so everything except the benchmark runs on a
-laptop. `appworld` pins pydantic 1.x and will downgrade it, which breaks
-unrelated packages in a shared environment; use a fresh one, and restart the
-kernel after installing in a notebook.
+Install `serve` only when you are about to serve a model. Nothing else needs it.
 
 ## Running things
 
 ```bash
-pytest -q                                   # 287 tests
+pytest -q                                   # 287 tests, no appworld needed
 python experiments/phase2_validation.py     # estimator validation, ~1 min, cpu
 python notebooks/phase1_gate.py --tasks 3   # determinism gate, smoke test
 python notebooks/phase1_gate.py             # determinism gate, 20 tasks
 python notebooks/hstar_census.py            # H* distribution and compute budget
 ```
 
-The gate and the census need `appworld` installed with its data downloaded:
+The gate and the census need the benchmark and its data:
 
 ```bash
 appworld install && appworld download data
 ```
 
-Neither needs a GPU. Replay re-executes logged actions with no model in the
-loop, so determinism is a property of the environment and can be settled before
-any inference quota is spent.
+Neither needs a GPU. Replay re-executes logged actions with no model in the loop,
+so determinism is a property of the environment and can be settled before any
+inference quota is spent.
+
+## On Kaggle
+
+Two cells, with a kernel restart between them. `appworld` pins pydantic 1.x and
+downgrades it, so anything importing it before the restart sees the old version
+still loaded. `%cd` does not survive the restart, hence the repeat.
+
+```python
+# cell 1, accelerator off
+!git clone https://github.com/yoadjei/hgd.git /kaggle/working/hgd
+%cd /kaggle/working/hgd
+!pip install -q -e ".[bench,dev]"
+!appworld install
+!appworld download data
+```
+
+Restart the kernel. Do not re-run cell 1.
+
+```python
+# cell 2
+%cd /kaggle/working/hgd
+!python notebooks/phase1_gate.py --tasks 3
+```
+
+Drop `--tasks 3` for the full twenty-task gate. The result is written to
+`phase1_gate.json` after every task, so an interrupted run still leaves evidence.
+
+For the GPU phase later, Kaggle gives two T4s. They are compute capability 7.5,
+so bfloat16 and FlashAttention-2 are both unavailable and `--dtype float16` is
+required, not optional.
 
 ## Layout
 

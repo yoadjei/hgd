@@ -4,9 +4,12 @@ Thin wrapper over ``hgd.gate``, which holds the logic and the tests. No GPU:
 replay re-executes the released gold solutions with no model in the loop, so
 determinism is settled before any inference quota is spent.
 
-    !pip install -q appworld==0.1.3.post1
-    !appworld install
-    !appworld download data
+Needs the bench extra only. Do not install serve for this; vllm builds from
+source and the gate never calls a model.
+
+    !pip install -q -e ".[bench]"
+    !appworld install && appworld download data
+    # restart the kernel here: appworld downgrades pydantic
     !python notebooks/phase1_gate.py --tasks 3      # smoke test
     !python notebooks/phase1_gate.py                # the real gate
 """

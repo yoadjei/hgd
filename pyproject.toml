@@ -8,12 +8,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# kept separate so the analysis and replay layers stay installable without a gpu
-# or a benchmark checkout. only the run layer needs these.
-run = [
+# split by what a step actually needs, and deliberately NOT bundled. pip resolves
+# an extra atomically, so pairing appworld with vllm meant vllm's source build
+# failing on kaggle took appworld down with it and the cpu-only determinism gate
+# could not run at all. the gate and the census need bench and nothing more.
+bench = [
     "appworld==0.1.3.post1",
-    "requests>=2.31",
+]
+# gpu inference. vllm builds from source on most hosts and pulls a large tree;
+# keep it away from anything that does not serve a model. requests lives here
+# because only vllm_client uses it.
+serve = [
     "vllm",
+    "requests>=2.31",
 ]
 # not imported anywhere yet; reserved for the phase 3 hazard glmm
 stats = [
