@@ -2,9 +2,14 @@
 
 Lesson 5: anything that runs elsewhere is checked here first. The probe's job is
 to answer questions about the real package, so this cannot verify its answers —
-only that the probe runs, exercises every check, and reports honestly. A fake that
-satisfies every assumption must make it report all-pass, and a fake that breaks
-one must make it report that one and keep going.
+only that it runs, exercises every scenario, reports honestly, and survives the
+failures the real package has already shown it.
+
+Three of those are now regressions rather than hypotheses. The first real run
+reported ``task_completed() flips: True -> True`` as a PASS, because the gold
+solution had already completed the task and the check never looked at its
+baseline. It then died in teardown inside appworld's time freezer and lost all
+twelve findings, because it wrote its record after the close.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import pytest
 PROBE_PATH = Path(__file__).resolve().parent.parent / "notebooks" / "adapter_probe.py"
 
 GOLD = "def solution(apis, requester):\n    apis.spotify.like_song(song_id=1)\n"
+FREEZER_ERROR = "'_freeze_time' object has no attribute 'fake_names'"
 
 
 class ProbeGroundTruth:
@@ -47,8 +53,10 @@ class ProbeEvaluation:
 class ProbeWorld:
     """A world that satisfies every assumption the probe checks.
 
-    Entries are returned as dicts once the task completes and strings before,
-    which is what the real package does and what every earlier fake got wrong.
+    Entries come back as dicts once the task completes and strings before, which
+    is what the real package does and what every earlier fake got wrong. The gold
+    solution completes the task by itself, which is also real, and is why the
+    completion check needs a world of its own.
     """
 
     def __init__(self, task_id, **kwargs):
@@ -61,8 +69,9 @@ class ProbeWorld:
         self._states: dict[str, tuple] = {}
 
     def execute(self, code: str) -> str:
-        if "like_song" in code:
+        if "like_song" in code or "solution(apis" in code:
             self._liked = True
+            self._completed = True
         if "complete_task" in code:
             self._completed = True
         return f"output of {code[:20]}"
@@ -73,18 +82,18 @@ class ProbeWorld:
     def evaluate(self):
         names = ["login_ok", "song_liked"] if self._liked else ["login_ok"]
         fails = [] if self._liked else ["song_liked"]
-        shape = (lambda n: [{"name": x, "score": 1} for x in n]) if self._completed \
-            else list
+        as_dicts = [{"name": x, "score": 1} for x in names]
         return ProbeEvaluation({
             "success": self._liked,
-            "passes": shape(names),
-            "failures": shape(fails),
+            "passes": as_dicts if self._completed else list(names),
+            "failures": ([{"name": x, "score": 0} for x in fails]
+                         if self._completed else list(fails)),
             "num_tests": 2,
             "difficulty": 1,
         })
 
     def save_state(self) -> str:
-        marker = f"s{len(self._states)}"
+        marker = str(len(self._states))
         self._states[marker] = (self._liked, self._completed)
         return marker
 
@@ -109,6 +118,14 @@ def load_probe(monkeypatch, world_class):
     return module
 
 
+def report(tmp_path):
+    return json.loads((tmp_path / "adapter_probe.json").read_text())
+
+
+def failed_checks(payload):
+    return [row["check"] for row in payload["checks"] if not row["ok"]]
+
+
 @pytest.fixture
 def in_tmp(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -119,31 +136,115 @@ def test_probe_reports_every_assumption_holding(in_tmp, monkeypatch):
     probe = load_probe(monkeypatch, ProbeWorld)
 
     exit_code = probe.main("train")
+    payload = report(in_tmp)
 
-    payload = json.loads((in_tmp / "adapter_probe.json").read_text())
     assert exit_code == 0
     assert payload["n_failed"] == 0
-    assert payload["n_checks"] >= 11
     assert payload["task_id"] == "probe_task_1"
+    names = [row["check"] for row in payload["checks"]]
+    for scenario, _ in probe.SCENARIOS:
+        assert f"{scenario}: close() after this sequence" in names
 
 
-def test_probe_records_a_broken_assumption_and_keeps_going(in_tmp, monkeypatch):
-    """The failure mode that matters: one bad answer must not hide the rest."""
+def test_every_scenario_gets_its_own_world(in_tmp, monkeypatch):
+    """One world per scenario is what makes a close() failure attributable."""
+    built = []
 
-    class NeverCompletes(ProbeWorld):
-        def task_completed(self) -> bool:
-            return False
+    class Counted(ProbeWorld):
+        def __init__(self, task_id, **kwargs):
+            super().__init__(task_id, **kwargs)
+            built.append(self)
 
-    probe = load_probe(monkeypatch, NeverCompletes)
+    probe = load_probe(monkeypatch, Counted)
+
+    probe.main("train")
+
+    assert len(built) == len(probe.SCENARIOS)
+    assert all(world.closed for world in built)
+
+
+def test_a_close_that_raises_is_attributed_to_its_sequence(in_tmp, monkeypatch):
+    """The real failure: close() raised inside appworld's time freezer after
+    save_state/load_state. It has to be pinned to that sequence, and every
+    scenario around it has to keep reporting."""
+
+    class BreaksCloseAfterLoad(ProbeWorld):
+        _broken = False
+
+        def load_state(self, marker):
+            super().load_state(marker)
+            self._broken = True
+
+        def close(self):
+            if self._broken:
+                raise AttributeError(FREEZER_ERROR)
+            super().close()
+
+    probe = load_probe(monkeypatch, BreaksCloseAfterLoad)
 
     exit_code = probe.main("train")
+    payload = report(in_tmp)
 
-    payload = json.loads((in_tmp / "adapter_probe.json").read_text())
-    failed = [row["check"] for row in payload["checks"] if not row["ok"]]
     assert exit_code == 1
-    assert failed == ["task_completed() flips after complete_task()"]
-    # the checks after the broken one still ran
-    assert payload["checks"][-1]["check"].startswith("the outcome views still")
+    assert failed_checks(payload) == ["saveload: close() after this sequence"]
+    assert "fake_names" in payload["checks"][-1]["observed"]
+
+
+def test_the_record_is_written_even_when_every_close_raises(in_tmp, monkeypatch):
+    """The regression that lost twelve findings: the report came after the close."""
+
+    class AlwaysBreaksClose(ProbeWorld):
+        def close(self):
+            raise AttributeError(FREEZER_ERROR)
+
+    probe = load_probe(monkeypatch, AlwaysBreaksClose)
+
+    probe.main("train")
+    payload = report(in_tmp)
+
+    assert payload["n_checks"] > len(probe.SCENARIOS)
+    assert len(failed_checks(payload)) == len(probe.SCENARIOS)
+
+
+def test_an_already_complete_task_fails_the_flip_check(in_tmp, monkeypatch):
+    """The vacuous PASS: the first real run reported True -> True and proved
+    nothing. A world already complete before complete_task() runs must fail this
+    check. Lesson 3 — a comparison has to confirm the outcome moved.
+    """
+
+    class BornComplete(ProbeWorld):
+        def __init__(self, task_id, **kwargs):
+            super().__init__(task_id, **kwargs)
+            self._completed = True
+
+    probe = load_probe(monkeypatch, BornComplete)
+
+    probe.main("train")
+    payload = report(in_tmp)
+
+    flip = next(row for row in payload["checks"]
+                if row["check"].startswith("flip: task_completed()"))
+    assert flip["ok"] is False
+    assert "prove nothing" in flip["observed"]
+
+
+def test_a_second_complete_task_that_changes_the_score_is_reported(in_tmp, monkeypatch):
+    """The real run went from pass_fraction 1.0 to 0.5 with a second
+    complete_task() in between. If that is the cause, P_obs stops being a property
+    of the trajectory and the probe has to say so."""
+
+    class DegradesOnSecondComplete(ProbeWorld):
+        def execute(self, code):
+            if "complete_task" in code and self._completed:
+                self._liked = False
+            return super().execute(code)
+
+    probe = load_probe(monkeypatch, DegradesOnSecondComplete)
+
+    probe.main("train")
+
+    assert "double: a second complete_task() leaves the evaluation alone" in \
+        failed_checks(report(in_tmp))
 
 
 def test_probe_catches_a_digest_that_does_not_move(in_tmp, monkeypatch):
@@ -151,38 +252,25 @@ def test_probe_catches_a_digest_that_does_not_move(in_tmp, monkeypatch):
     first gate report total fidelity while executing nothing."""
 
     class FrozenState(ProbeWorld):
-        def execute(self, code: str) -> str:
+        def execute(self, code):
             return f"output of {code[:20]}"
 
     probe = load_probe(monkeypatch, FrozenState)
 
     probe.main("train")
 
-    payload = json.loads((in_tmp / "adapter_probe.json").read_text())
-    failed = [row["check"] for row in payload["checks"] if not row["ok"]]
-    assert "state_hash() moves when the gold solution runs" in failed
+    assert "gold: state_hash() moves when the gold solution runs" in \
+        failed_checks(report(in_tmp))
 
 
 def test_probe_flags_a_snapshot_that_leaks_raw_entries(in_tmp, monkeypatch):
     """The defect this whole exercise came from: a predicate written
     `name in state["failures"]` is silently False on raw dict entries."""
-
-    class RawEntries(ProbeWorld):
-        def evaluate(self):
-            return ProbeEvaluation({
-                "success": False,
-                "passes": [{"name": "login_ok", "score": 1}],
-                "failures": [{"name": "song_liked", "score": 0}],
-                "num_tests": 2,
-                "difficulty": 1,
-            })
-
-    probe = load_probe(monkeypatch, RawEntries)
+    probe = load_probe(monkeypatch, ProbeWorld)
     monkeypatch.setattr(probe.AppWorldEnvironment, "snapshot",
                         lambda self: dict(self.world.evaluate().to_dict()))
 
     probe.main("train")
 
-    payload = json.loads((in_tmp / "adapter_probe.json").read_text())
-    failed = [row["check"] for row in payload["checks"] if not row["ok"]]
-    assert "snapshot() normalises passes and failures to names" in failed
+    assert "gold: snapshot() normalises passes and failures to names" in \
+        failed_checks(report(in_tmp))

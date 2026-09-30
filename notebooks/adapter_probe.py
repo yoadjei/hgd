@@ -2,19 +2,21 @@
 
 Every defect that reached a real run so far came from a test double that encoded
 the same assumption as the code, so the suite could not fail. This probe removes
-the remaining assumptions by asking the installed package directly, and it runs
-the adapter itself — ``AppWorldEnvironment`` has never touched real AppWorld,
-because the gate drives the raw package instead.
+the assumptions by asking the installed package directly, and it drives the
+adapter itself — the gate exercises raw AppWorld and a digest function, so
+``AppWorldEnvironment``, the checkpoint layer and the outcome views were all
+unobserved until this ran.
 
-Four assumptions are still guesses, and the pilot runner is built on all four:
+**One world per scenario, and closing is itself under test.** The first real run
+raised inside AppWorld's freezegun time freezer on ``close()``, which the gate
+never sees because the gate never saves or loads state. Attributing that to a
+particular sequence of calls needs a fresh world per sequence, so each scenario
+gets one and reports its own close.
 
-1. ``execute()`` returns a string.
-2. ``task_completed()`` flips after ``apis.supervisor.complete_task()``.
-3. ``save_state()`` and ``load_state()`` really restore state.
-4. ``snapshot()`` survives whatever shapes the payload actually contains.
-
-Every check reports rather than raises, so one run answers all of them instead of
-stopping at the first surprise.
+Every check reports rather than raises, and the record is written even when a
+scenario dies, so one run answers everything instead of stopping at the first
+surprise. The previous version wrote its findings after teardown and lost all
+twelve of them when teardown raised.
 
     !pip install -q -e ".[bench]"
     !appworld install && appworld download data
@@ -25,6 +27,7 @@ stopping at the first surprise.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import traceback
@@ -34,11 +37,13 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from hgd.appworld_env import (  # noqa: E402
+    SOLUTION_INVOCATION,
     AppWorldEnvironment,
     evaluation_digest,
     silenced,
 )
 from hgd.checkpoints import Checkpoint, evaluate_checkpoints  # noqa: E402
+from hgd.gate import unique_experiment_names  # noqa: E402
 from hgd.outcomes import checkpoint_vector, pass_fraction, task_success  # noqa: E402
 
 RESULT_PATH = Path("adapter_probe.json")
@@ -66,141 +71,219 @@ def check(name: str, fn: Callable[[], Any]) -> Any:
         return None
 
 
-def main(split: str = "train") -> int:
-    from appworld import AppWorld, load_task_ids
+def run_gold_solution(env: AppWorldEnvironment) -> None:
+    """Define the gold solution and then call it.
 
-    task_id = list(load_task_ids(split))[0]
-    print(f"probing the adapter on {task_id}\n", flush=True)
+    ``compiled_solution_code`` is a ``def solution(apis, requester)`` wrapper, so
+    executing it only binds a name. The second call is what moves the world.
+    """
+    with silenced():
+        env.execute(env.gold_solution_code())
+        env.execute(SOLUTION_INVOCATION)
 
-    def world_factory(tid: str, **kwargs: Any) -> Any:
+
+def outcome_views(env: AppWorldEnvironment) -> dict[str, Any]:
+    state = env.snapshot()
+    return {"task_success": task_success(state),
+            "pass_fraction": round(pass_fraction(state), 4),
+            "n_checkpoints": len(checkpoint_vector(state))}
+
+
+def snapshot_is_normalised(env: AppWorldEnvironment) -> dict[str, Any]:
+    """Checkpoint predicates read this, so its shape matters more than its content."""
+    state = env.snapshot()
+    for key in ("passes", "failures"):
+        bad = [e for e in (state.get(key) or []) if not isinstance(e, str)]
+        assert not bad, f"{key} still holds non-strings: {bad[:2]}"
+    return {"keys": sorted(state),
+            "value_types": {k: type(v).__name__ for k, v in state.items()}}
+
+
+# --- scenarios --------------------------------------------------------------
+# each runs on its own world, and the name prefixes every check, so a close()
+# failure is attributable to the sequence that caused it
+
+
+def scenario_open_and_close(env: AppWorldEnvironment) -> None:
+    """The floor. If this cannot close, nothing else about close is diagnostic."""
+
+
+def scenario_execute(env: AppWorldEnvironment) -> None:
+    def returns_a_string() -> str:
+        out = env.execute("print('probe')")
+        assert isinstance(out, str), f"got {type(out).__name__}, not str"
+        return f"str, {len(out)} chars, repr {out[:60]!r}"
+
+    check("execute: returns a str", returns_a_string)
+
+
+def scenario_gold_solution(env: AppWorldEnvironment) -> None:
+    def digest_moves() -> str:
+        before = env.state_hash()
+        run_gold_solution(env)
+        after = env.state_hash()
+        assert before != after, "gold solution did not move the digest"
+        return f"{before[:12]} -> {after[:12]}"
+
+    check("gold: state_hash() moves when the gold solution runs", digest_moves)
+
+    # observation, not an assertion: the released solution calls complete_task()
+    # itself. an earlier version checked the completion flip *after* running the
+    # gold solution, so the baseline was already True and the check passed while
+    # proving nothing.
+    check("gold: does the solution complete the task by itself",
+          env.task_completed)
+
+    check("gold: snapshot() normalises passes and failures to names",
+          lambda: snapshot_is_normalised(env))
+    check("gold: the three outcome views all compute", lambda: outcome_views(env))
+    check("gold: evaluate_checkpoints() runs against a live world",
+          lambda: [r.to_dict() for r in evaluate_checkpoints(
+              env, (Checkpoint("any_pass", stage=0,
+                               predicate=lambda s: bool(s.get("passes"))),))])
+
+
+def scenario_completion_flip(env: AppWorldEnvironment) -> None:
+    """The assumption harness.py breaks its loop on.
+
+    On a fresh world, so the baseline is genuinely incomplete. If completion never
+    reported, every episode would run to the full 3*H* step limit.
+    """
+    def flips() -> str:
+        before = env.task_completed()
+        assert not before, (
+            "already complete before complete_task() ran, so no flip can be "
+            "observed and this check would prove nothing"
+        )
         with silenced():
-            return AppWorld(task_id=tid, **kwargs)
+            env.execute(COMPLETE_TASK)
+        after = env.task_completed()
+        assert after, f"task_completed() stayed {after!r} after complete_task()"
+        return f"{before!r} -> {after!r}"
 
-    env = AppWorldEnvironment(
-        world_factory=world_factory,
-        state_digest=evaluation_digest,
-        experiment_name="adapter_probe",
-    )
+    check("flip: task_completed() goes False -> True on complete_task()", flips)
 
-    try:
-        check("reset() loads a task", lambda: (env.reset(task_id, seed=0), task_id)[1])
-        check("intrinsic_horizon() is a positive int", lambda: env.intrinsic_horizon())
-        check("gold_solution_code() returns source",
-              lambda: f"{len(env.gold_solution_code())} chars")
 
-        # 1. execute() return type. the adapter types it str and truncates the
-        # result with a slice, which would raise on anything else.
-        def execute_returns_a_string() -> str:
-            out = env.execute("print('probe')")
-            assert isinstance(out, str), f"got {type(out).__name__}, not str"
-            return f"str, {len(out)} chars, repr {out[:60]!r}"
+def scenario_double_complete(env: AppWorldEnvironment) -> None:
+    """Does completing an already-complete task change the evaluation?
 
-        check("execute() returns a str", execute_returns_a_string)
-
-        # 2. the digest has to move when state moves, or the fidelity gate and
-        # every replay check are comparing constants.
-        def digest_responds_to_the_gold_solution() -> str:
-            before = env.state_hash()
-            with silenced():
-                env.execute(env.gold_solution_code())
-                env.execute("solution(apis, requester)")
-            after = env.state_hash()
-            assert before != after, "gold solution did not move the digest"
-            return f"{before[:12]} -> {after[:12]}"
-
-        check("state_hash() moves when the gold solution runs",
-              digest_responds_to_the_gold_solution)
-
-        # 3. snapshot() feeds checkpoint predicates and the oracle summary, so its
-        # shape matters more than its content.
-        def snapshot_is_usable() -> dict[str, Any]:
-            state = env.snapshot()
-            shapes = {k: type(v).__name__ for k, v in state.items()}
-            for key in ("passes", "failures"):
-                entries = state.get(key) or []
-                bad = [e for e in entries if not isinstance(e, str)]
-                assert not bad, f"{key} still holds non-strings: {bad[:2]}"
-            return {"keys": sorted(state), "value_types": shapes}
-
-        snapshot = check("snapshot() normalises passes and failures to names",
-                         snapshot_is_usable)
-
-        def outcome_views_agree() -> dict[str, Any]:
-            state = env.snapshot()
-            return {"task_success": task_success(state),
-                    "pass_fraction": round(pass_fraction(state), 4),
-                    "n_checkpoints": len(checkpoint_vector(state))}
-
-        check("the three outcome views all compute", outcome_views_agree)
-
-        def checkpoints_evaluate() -> Any:
-            probe = Checkpoint("any_pass", stage=0,
-                               predicate=lambda s: bool(s.get("passes")))
-            return [r.to_dict() for r in evaluate_checkpoints(env, (probe,))]
-
-        check("evaluate_checkpoints() runs against a live world",
-              checkpoints_evaluate)
-
-        # 4. save_state/load_state. the replay layer assumes a restore is exact;
-        # if it is not, branching an episode at step k is unsound.
-        def save_and_load_restore_state() -> str:
-            marker = env.save_state()
-            saved = env.state_hash()
-            with silenced():
-                env.execute("apis.supervisor.complete_task()")
-            moved = env.state_hash()
-            env.load_state(marker)
-            restored = env.state_hash()
-            assert restored == saved, (
-                f"restore is not exact: saved {saved[:12]}, "
-                f"moved {moved[:12]}, restored {restored[:12]}"
-            )
-            return f"marker {marker!r}, exact restore confirmed"
-
-        check("save_state()/load_state() restore exactly",
-              save_and_load_restore_state)
-
-        # 5. the harness breaks the loop on this, so a completion that never
-        # reports would run every episode to the full 3*H* step limit.
-        def completion_is_reported() -> str:
-            before = env.task_completed()
-            with silenced():
-                env.execute(COMPLETE_TASK)
-            after = env.task_completed()
-            assert after, f"task_completed() stayed {after!r} after complete_task()"
-            return f"{before!r} -> {after!r}"
-
-        check("task_completed() flips after complete_task()",
-              completion_is_reported)
-
-        # entries change shape once a task completes, which is the defect class
-        # that reached a real run three times. re-check every view after the fact.
-        check("snapshot() is still name-normalised after completion",
-              snapshot_is_usable)
-        check("the outcome views still compute after completion",
-              outcome_views_agree)
-    finally:
+    The first real run measured pass_fraction 1.0 after the gold solution and 0.5
+    later, with a second complete_task() in between. If that is the cause, a model
+    that calls complete_task() twice scores itself down and P_obs stops being a
+    property of the trajectory.
+    """
+    def unchanged_by_a_second_call() -> dict[str, Any]:
+        run_gold_solution(env)
+        before = outcome_views(env)
         with silenced():
-            env.close()
+            env.execute(COMPLETE_TASK)
+        after = outcome_views(env)
+        assert before == after, f"evaluation changed: {before} -> {after}"
+        return {"before": before, "after": after}
 
-    failed = [r for r in results if not r["ok"]]
+    check("double: a second complete_task() leaves the evaluation alone",
+          unchanged_by_a_second_call)
+
+
+def scenario_save_and_load(env: AppWorldEnvironment) -> None:
+    """The replay layer assumes a restore is exact. Branching at step k needs it.
+
+    This is also the sequence the first real run died on: close() raised inside
+    appworld's time freezer afterwards, so this scenario's close check is the one
+    to read.
+    """
+    def restores_exactly() -> str:
+        marker = env.save_state()
+        saved = env.state_hash()
+        with silenced():
+            env.execute(COMPLETE_TASK)
+        moved = env.state_hash()
+        env.load_state(marker)
+        restored = env.state_hash()
+        assert restored == saved, (
+            f"restore is not exact: saved {saved[:12]}, moved {moved[:12]}, "
+            f"restored {restored[:12]}"
+        )
+        return (f"marker {marker!r} ({type(marker).__name__}), "
+                f"moved to {moved[:12]}, restored exactly")
+
+    check("saveload: save_state()/load_state() restore exactly", restores_exactly)
+
+
+SCENARIOS: tuple[tuple[str, Callable[[AppWorldEnvironment], None]], ...] = (
+    ("open", scenario_open_and_close),
+    ("execute", scenario_execute),
+    ("gold", scenario_gold_solution),
+    ("flip", scenario_completion_flip),
+    ("double", scenario_double_complete),
+    ("saveload", scenario_save_and_load),
+)
+
+
+def write_report(task_id: str, split: str) -> None:
+    failed = [row for row in results if not row["ok"]]
     payload = {"task_id": task_id, "split": split, "n_checks": len(results),
-               "n_failed": len(failed), "checks": results,
-               "first_snapshot": snapshot}
-    RESULT_PATH.write_text(json.dumps(payload, indent=2, default=str))
+               "n_failed": len(failed), "checks": results}
+    with contextlib.suppress(OSError):
+        RESULT_PATH.write_text(json.dumps(payload, indent=2, default=str))
 
     print(f"\n{len(results) - len(failed)}/{len(results)} assumptions hold")
     if failed:
         print("\nassumptions that do NOT hold, fix these before the pilot runner:")
         for row in failed:
-            print(f"  - {row['check']}: {row['observed']}")
+            print(f"  - {row['check']}\n      {row['observed']}")
         print("\n--- first traceback ---")
         print(failed[0]["traceback"])
     else:
-        print("every assumption the pilot runner rests on is now observed, not guessed.")
+        print("every assumption the pilot runner rests on is now observed.")
 
     print(f"\nwrote {RESULT_PATH.resolve()}")
-    return 1 if failed else 0
+
+
+def main(split: str = "train") -> int:
+    from appworld import AppWorld, load_task_ids
+
+    task_id = list(load_task_ids(split))[0]
+    name_for = unique_experiment_names("adapter_probe")
+    print(f"probing the adapter on {task_id}, one world per scenario\n", flush=True)
+
+    def make_env() -> AppWorldEnvironment:
+        def world_factory(tid: str, **kwargs: Any) -> Any:
+            with silenced():
+                return AppWorld(task_id=tid, **kwargs)
+
+        return AppWorldEnvironment(
+            world_factory=world_factory,
+            state_digest=evaluation_digest,
+            experiment_name=name_for(),
+        )
+
+    try:
+        for name, body in SCENARIOS:
+            print(f"--- {name} ---", flush=True)
+            env = make_env()
+            try:
+                loaded = check(f"{name}: reset() loads the task",
+                               lambda e=env: (e.reset(task_id, seed=0), task_id)[1])
+                if loaded:
+                    body(env)
+            finally:
+                # closing is under test, not teardown. the harness closes on every
+                # reset, so a close that raises ends a multi-task run at its second
+                # task, and the gate never sees it because it never saves state.
+                def close_cleanly(active: AppWorldEnvironment = env) -> str:
+                    with silenced():
+                        active.close()
+                    return "closed without raising"
+
+                check(f"{name}: close() after this sequence", close_cleanly)
+    finally:
+        # a probe that dies without writing its findings is worth nothing. the
+        # previous version wrote after teardown and lost all twelve findings when
+        # teardown raised inside appworld's time freezer.
+        write_report(task_id, split)
+
+    return 1 if any(not row["ok"] for row in results) else 0
 
 
 if __name__ == "__main__":

@@ -68,6 +68,15 @@ gate's most reassuring answer.
 **Rule.** Any check that compares two outcomes for equality must also confirm
 the outcomes moved away from the untouched baseline.
 
+**It happened again, in the guard's own probe.** The adapter probe checked that
+`task_completed()` flips after `complete_task()` and reported `True -> True` as a
+PASS. It asserted only the final value, never the baseline, and the gold solution
+run earlier in the same world had already completed the task. So the check proved
+nothing and said the assumption held. The rule above is not only for gates and
+estimators — it binds hardest on the checks written to verify something, because
+those are the ones whose PASS gets believed. Each scenario now gets a fresh world
+and the check asserts the baseline first.
+
 ## 4. Consistency tests must parse, not grep
 
 **What went wrong.** The test that the gate script imports nothing from the
@@ -83,3 +92,17 @@ GPU quota would have been spent on a gate that needed no GPU.
 **Rule.** Anything handed over to run elsewhere is syntax-checked and
 lint-checked first. Determinism and census work run on CPU before any
 inference quota is committed.
+
+## 6. A diagnostic must survive the failure it is diagnosing
+
+**What went wrong.** The adapter probe ran twelve checks against the real package
+and then died in teardown, inside appworld's time freezer, on `close()`. It wrote
+its record *after* the teardown, so every finding was lost and the only evidence
+was the console scrollback. A second defect was hidden by the same structure: one
+long-lived world meant the failing `close()` could not be attributed to the call
+sequence that caused it.
+
+**Rule.** A probe writes its record in a `finally`, before anything that can
+raise. Teardown that can fail is a check, not teardown. When a probe exists to
+find which operation breaks something, give each candidate sequence its own
+fixture, or the answer is one bit wide.

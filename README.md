@@ -114,11 +114,25 @@ returns zero, and propagation separates cleanly with disjoint intervals. Two
 controls make it able to fail: a length-sensitive policy that violates
 `history_scrub`'s identification assumption, and a byte-matched placebo summary.
 
-Phase 1 is not passed. The determinism gate, kill condition C, has run clean on
-three tasks but not yet on twenty. Three earlier attempts were void rather than
-failed, each caught by the no-op guard rather than by a number looking wrong.
-`tasks/todo.md` has the defect table; it is worth reading before trusting any
-result from this repository.
+Phase 1 passed on 2026-09-30: 20/20 matched, `no_effect=0`, `skipped=0`,
+`errored=0` against appworld 0.1.3.post1. Kill condition C is satisfied and the
+run is not vacuous — every task moved away from its baseline, which is what the
+no-op guard checks. Three earlier attempts were void rather than failed, each
+caught by that guard rather than by a number looking wrong.
+
+The caveat worth carrying into the paper: fidelity is established under
+`evaluation_digest`, which is behavioural. Two states agreeing on every unit test
+are equivalent *for our estimands*, but the digest cannot see collateral state the
+tests ignore. `database_digest` is the strict alternative and has not been run.
+
+Two adapter defects are open, both found by `notebooks/adapter_probe.py` and
+neither visible to the gate. `close()` raises inside appworld's freezegun time
+freezer after `save_state`/`load_state`, and the harness closes on every `reset()`,
+so a multi-task run would die at its second task. Separately, the evaluation
+appears to degrade when `complete_task()` is called on an already-complete task —
+pass fraction went 1.0 to 0.5 across a second call. The probe now measures both
+instead of inferring them. `tasks/todo.md` has the defect table; it is worth
+reading before trusting any result from this repository.
 
 ## A note on the guards
 
