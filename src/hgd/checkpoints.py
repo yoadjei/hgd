@@ -55,6 +55,11 @@ def evaluate_checkpoints(
     than propagated: a broken assertion must not destroy a long run, and the
     error is needed to tell a genuine state failure from a broken check.
     """
+    # snapshot before the guard would cost an evaluate() per step on appworld,
+    # which runs the task's unit tests, for runs that configured no checkpoints
+    if not checkpoints:
+        return ()
+
     state = env.snapshot()
     results: list[CheckpointResult] = []
 

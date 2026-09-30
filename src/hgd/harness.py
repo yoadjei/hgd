@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from hgd.checkpoints import Checkpoint, evaluate_checkpoints
 from hgd.env import Environment
 from hgd.model import Model
 from hgd.parsing import ActionFormat, parse_action
@@ -38,6 +39,12 @@ class HarnessConfig:
     system_prompt: str = ""
     tools: tuple[Mapping[str, Any], ...] = ()
     observation_truncation: int = 4096
+    # tier-2 state assertions, evaluated after every step. these cannot be
+    # recovered from the log afterwards the way event and judge labels can: a
+    # checkpoint reads live environment state, and the world is closed by the time
+    # anything reads the jsonl. empty by default because each pass costs an extra
+    # evaluate(), which on appworld runs the task's unit tests.
+    checkpoints: tuple[Checkpoint, ...] = ()
 
 
 def _sha256(text: str) -> str:
@@ -130,7 +137,15 @@ def run_episode(
                 tool_result=tool_result,
                 tool_result_hash=_sha256(tool_result or ""),
                 env_state_hash=env.state_hash(),
-                checkpoint_results=[],
+                # dicts, not CheckpointResult objects: a StepRecord is a log line
+                # and every field has to survive to_json(). storing the dataclass
+                # made to_json raise TypeError on the first step that had a
+                # checkpoint, which no test caught because none both ran
+                # checkpoints and serialised the result.
+                checkpoint_results=[
+                    result.to_dict()
+                    for result in evaluate_checkpoints(env, config.checkpoints)
+                ],
                 event_labels=[],
                 judge_labels=[],
                 tokens_in=response.tokens_in,
