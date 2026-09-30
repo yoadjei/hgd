@@ -12,6 +12,9 @@ source and the gate never calls a model.
     # restart the kernel here: appworld downgrades pydantic
     !python notebooks/phase1_gate.py --tasks 3      # smoke test
     !python notebooks/phase1_gate.py                # the real gate
+
+Writes ``results/phase1_gate.json``. Commit it: it is the evidence for kill
+condition C, and a hosted runtime's working directory does not survive the session.
 """
 
 from __future__ import annotations
@@ -29,11 +32,19 @@ from hgd.gate import run_gate, unique_experiment_names  # noqa: E402
 
 DEFAULT_TASKS = 20
 SPLIT = "train"
-RESULT_PATH = Path("phase1_gate.json")
+# alongside the phase 2 evidence, not in whatever directory the runner was called
+# from. this is the evidence for kill condition C, and it was previously written to
+# the cwd and gitignored by name, so the only copy of a passing gate lived on an
+# ephemeral kaggle disk.
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 
 
-def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT) -> int:
+def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT,
+         out_dir: Path | None = None) -> int:
     from appworld import AppWorld, load_task_ids
+
+    result_path = (out_dir or RESULTS_DIR) / "phase1_gate.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
 
     task_ids = list(load_task_ids(split))[:n_tasks]
     name_for = unique_experiment_names("phase1_gate")
@@ -65,7 +76,7 @@ def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT) -> int:
     report = run_gate(task_ids, open_world, evaluation_digest, on_result=report_line)
 
     payload = report.to_dict(expected=len(task_ids))
-    RESULT_PATH.write_text(json.dumps(payload, indent=2, default=str))
+    result_path.write_text(json.dumps(payload, indent=2, default=str))
 
     print(f"\nfidelity {payload['n_matched']}/{payload['total']}"
           f"   no_effect={len(payload['no_effect'])}"
@@ -82,7 +93,7 @@ def main(n_tasks: int = DEFAULT_TASKS, split: str = SPLIT) -> int:
     else:
         print("GATE NOT PASSED - do not proceed to causal analysis.")
 
-    print(f"\nwrote {RESULT_PATH.resolve()}")
+    print(f"\nwrote {result_path.resolve()}")
     return 0 if payload["passes_gate"] else 1
 
 
@@ -91,5 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--tasks", type=int, default=DEFAULT_TASKS,
                         help="how many tasks to gate (use 3 for a smoke test)")
     parser.add_argument("--split", default=SPLIT)
+    parser.add_argument("--out", type=Path, default=None,
+                        help="where to write the result (default: results/)")
     args = parser.parse_args()
-    raise SystemExit(main(args.tasks, args.split))
+    raise SystemExit(main(args.tasks, args.split, args.out))

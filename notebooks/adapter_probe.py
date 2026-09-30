@@ -46,7 +46,9 @@ from hgd.checkpoints import Checkpoint, evaluate_checkpoints  # noqa: E402
 from hgd.gate import unique_experiment_names  # noqa: E402
 from hgd.outcomes import checkpoint_vector, pass_fraction, task_success  # noqa: E402
 
-RESULT_PATH = Path("adapter_probe.json")
+# alongside the phase 2 evidence rather than in the caller's directory, so a probe
+# result is archived with everything else instead of living on an ephemeral disk
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 COMPLETE_TASK = "apis.supervisor.complete_task()"
 
 results: list[dict[str, Any]] = []
@@ -294,12 +296,13 @@ SCENARIOS: tuple[tuple[str, Callable[[AppWorldEnvironment], None]], ...] = (
 )
 
 
-def write_report(task_id: str, split: str) -> None:
+def write_report(task_id: str, split: str, result_path: Path) -> None:
     failed = [row for row in results if not row["ok"]]
     payload = {"task_id": task_id, "split": split, "n_checks": len(results),
                "n_failed": len(failed), "checks": results}
     with contextlib.suppress(OSError):
-        RESULT_PATH.write_text(json.dumps(payload, indent=2, default=str))
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(payload, indent=2, default=str))
 
     print(f"\n{len(results) - len(failed)}/{len(results)} assumptions hold")
     if failed:
@@ -311,12 +314,13 @@ def write_report(task_id: str, split: str) -> None:
     else:
         print("every assumption the pilot runner rests on is now observed.")
 
-    print(f"\nwrote {RESULT_PATH.resolve()}")
+    print(f"\nwrote {result_path.resolve()}")
 
 
-def main(split: str = "train") -> int:
+def main(split: str = "train", out_dir: Path | None = None) -> int:
     from appworld import AppWorld, load_task_ids
 
+    result_path = (out_dir or RESULTS_DIR) / "adapter_probe.json"
     task_id = list(load_task_ids(split))[0]
     name_for = unique_experiment_names("adapter_probe")
     print(f"probing the adapter on {task_id}, one world per scenario\n", flush=True)
@@ -355,7 +359,7 @@ def main(split: str = "train") -> int:
         # a probe that dies without writing its findings is worth nothing. the
         # previous version wrote after teardown and lost all twelve findings when
         # teardown raised inside appworld's time freezer.
-        write_report(task_id, split)
+        write_report(task_id, split, result_path)
 
     return 1 if any(not row["ok"] for row in results) else 0
 
@@ -363,5 +367,7 @@ def main(split: str = "train") -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", default="train")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="where to write the result (default: results/)")
     args = parser.parse_args()
-    raise SystemExit(main(args.split))
+    raise SystemExit(main(args.split, args.out))

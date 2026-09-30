@@ -10,13 +10,14 @@ dist/
 .pytest_cache/
 .ruff_cache/
 
-# run artefacts. results/phase2_validation.json is tracked on purpose: it is
-# the phase 2 gate evidence and regenerates deterministically from
-# experiments/phase2_validation.py. everything the gpu runs write goes here.
+# run artefacts. the small json files under results/ are tracked on purpose: they
+# are the gate evidence for each phase and regenerate deterministically from the
+# runner that wrote them. phase1_gate.json was previously ignored by name, which
+# meant the evidence for kill condition C, the precondition for every causal claim
+# here, only ever existed on the ephemeral disk of whatever machine ran it.
+# the bulk per-episode logs are a different matter and stay out.
 results/runs/
 *.jsonl
-phase1_gate.json
-hstar_census.json
 
 # appworld download and experiment outputs
 data/

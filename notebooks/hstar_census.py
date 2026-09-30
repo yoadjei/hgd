@@ -12,7 +12,10 @@ here calls a model.
     !python notebooks/hstar_census.py
 """
 
-import json, statistics as st
+import json
+import statistics as st
+from pathlib import Path
+
 from appworld import AppWorld, load_task_ids
 
 rows = []
@@ -72,6 +75,8 @@ if h_api:
           f"median {int(st.median([c['h_api'] for c in cheap]))}")
     print("ids:", [c["task_id"] for c in cheap[:10]], "...")
 
-with open("hstar_census.json", "w", encoding="utf-8") as handle:
+census_path = Path(__file__).resolve().parent.parent / "results" / "hstar_census.json"
+census_path.parent.mkdir(parents=True, exist_ok=True)
+with open(census_path, "w", encoding="utf-8") as handle:
     json.dump(rows, handle, indent=2, default=str)
-print("\nwrote hstar_census.json")
+print(f"\nwrote {census_path}")

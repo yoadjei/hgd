@@ -170,7 +170,7 @@ def in_tmp(tmp_path, monkeypatch):
 def test_probe_reports_every_assumption_holding(in_tmp, monkeypatch):
     probe = load_probe(monkeypatch, ProbeWorld)
 
-    exit_code = probe.main("train")
+    exit_code = probe.main("train", in_tmp)
     payload = report(in_tmp)
 
     assert exit_code == 0
@@ -192,7 +192,7 @@ def test_every_scenario_gets_its_own_world(in_tmp, monkeypatch):
 
     probe = load_probe(monkeypatch, Counted)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert len(built) == len(probe.SCENARIOS)
     assert all(world.closed for world in built)
@@ -219,7 +219,7 @@ def test_a_close_that_raises_is_attributed_to_its_sequence(in_tmp, monkeypatch):
 
     probe = load_probe(monkeypatch, BreaksCloseAfterSave)
 
-    exit_code = probe.main("train")
+    exit_code = probe.main("train", in_tmp)
     payload = report(in_tmp)
 
     assert exit_code == 1
@@ -237,7 +237,7 @@ def test_the_probe_catches_a_load_state_that_stops_refusing(in_tmp, monkeypatch)
     monkeypatch.setattr(probe.AppWorldEnvironment, "load_state",
                         lambda self, state_id: self.world.load_state(state_id))
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "markers: load_state() is refused rather than corrupting the clock" in \
         failed_checks(report(in_tmp))
@@ -256,7 +256,7 @@ def test_the_probe_catches_a_shell_clock_that_is_not_frozen(in_tmp, monkeypatch)
 
     probe = load_probe(monkeypatch, WallClockShell)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "clock: the shell clock is frozen to the task datetime" in \
         failed_checks(report(in_tmp))
@@ -272,7 +272,7 @@ def test_the_record_is_written_even_when_every_close_raises(in_tmp, monkeypatch)
 
     probe = load_probe(monkeypatch, AlwaysBreaksClose)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
     payload = report(in_tmp)
 
     assert payload["n_checks"] > len(probe.SCENARIOS)
@@ -292,7 +292,7 @@ def test_an_already_complete_task_fails_the_flip_check(in_tmp, monkeypatch):
 
     probe = load_probe(monkeypatch, BornComplete)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
     payload = report(in_tmp)
 
     flip = next(row for row in payload["checks"]
@@ -314,7 +314,7 @@ def test_a_second_complete_task_that_changes_the_score_is_reported(in_tmp, monke
 
     probe = load_probe(monkeypatch, DegradesOnSecondComplete)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "double: a second complete_task() leaves the evaluation alone" in \
         failed_checks(report(in_tmp))
@@ -330,7 +330,7 @@ def test_probe_catches_a_digest_that_does_not_move(in_tmp, monkeypatch):
 
     probe = load_probe(monkeypatch, FrozenState)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "gold: state_hash() moves when the gold solution runs" in \
         failed_checks(report(in_tmp))
@@ -343,7 +343,7 @@ def test_probe_flags_a_snapshot_that_leaks_raw_entries(in_tmp, monkeypatch):
     monkeypatch.setattr(probe.AppWorldEnvironment, "snapshot",
                         lambda self: dict(self.world.evaluate().to_dict()))
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "gold: snapshot() normalises passes and failures to names" in \
         failed_checks(report(in_tmp))
@@ -366,7 +366,7 @@ def test_the_depth_check_accepts_whatever_baseline_the_world_establishes(in_tmp,
 
     probe = load_probe(monkeypatch, TwoFreezes)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "gold: evaluating does not leak a time freeze" not in \
         failed_checks(report(in_tmp))
@@ -392,7 +392,7 @@ def test_the_depth_check_still_catches_a_freeze_leaked_while_evaluating(in_tmp, 
 
     probe = load_probe(monkeypatch, LeaksOnEvaluate)
 
-    probe.main("train")
+    probe.main("train", in_tmp)
 
     assert "gold: evaluating does not leak a time freeze" in \
         failed_checks(report(in_tmp))

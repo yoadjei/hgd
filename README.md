@@ -83,9 +83,15 @@ Restart the kernel. Do not re-run cell 1.
 !python notebooks/phase1_gate.py
 ```
 
-The result is written to `phase1_gate.json` after every task, so an interrupted
-run still leaves evidence. The probe writes `adapter_probe.json`; read its failures
-before trusting anything built on the adapter.
+Both write into `results/`, alongside the Phase 2 evidence: `results/phase1_gate.json`
+after every task, so an interrupted run still leaves something, and
+`results/adapter_probe.json`. Read the probe's failures before trusting anything
+built on the adapter.
+
+Commit those two files. They are the evidence for their gates, and on a hosted
+runtime the working directory does not survive the session — `git add results/ &&
+git commit && git push` from the notebook, or download them, before the kernel
+stops.
 
 For the GPU phase later, Kaggle gives two T4s. They are compute capability 7.5,
 so bfloat16 and FlashAttention-2 are both unavailable and `--dtype float16` is
