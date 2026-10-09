@@ -60,15 +60,17 @@ inference quota is spent.
 
 ## On Kaggle
 
-Two cells, with a kernel restart between them. `appworld` pins pydantic 1.x and
-downgrades it, so anything importing it before the restart sees the old version
-still loaded. `%cd` does not survive the restart, hence the repeat.
+Three cells, with a kernel restart after the first. `appworld` pins pydantic 1.x
+and downgrades it, so anything importing it before the restart sees the old version
+still loaded. `%cd` does not survive the restart, hence the repeat. None of this
+needs a GPU; leave the accelerator off.
 
 ```python
-# cell 1, accelerator off
+# cell 1: install. run once, then restart the kernel
+!rm -rf /kaggle/working/hgd
 !git clone https://github.com/yoadjei/hgd.git /kaggle/working/hgd
 %cd /kaggle/working/hgd
-!pip install -q -e ".[bench,dev]"   # dev is only pytest, so you can verify the clone
+!pip install -q -e ".[bench,dev]"
 !appworld install
 !appworld download data
 ```
@@ -76,22 +78,32 @@ still loaded. `%cd` does not survive the restart, hence the repeat.
 Restart the kernel. Do not re-run cell 1.
 
 ```python
-# cell 2
+# cell 2: verify, then run
 %cd /kaggle/working/hgd
-!python notebooks/adapter_probe.py
-!python notebooks/phase1_gate.py --tasks 3
-!python notebooks/phase1_gate.py
+!python -m pytest -q                          # the suite, on kaggle's interpreter
+!python notebooks/adapter_probe.py            # adapter against the real package
+!python notebooks/phase1_gate.py --tasks 3    # smoke test
+!python notebooks/phase1_gate.py              # the gate, kill condition C
 ```
 
-Both write into `results/`, alongside the Phase 2 evidence: `results/phase1_gate.json`
-after every task, so an interrupted run still leaves something, and
-`results/adapter_probe.json`. Read the probe's failures before trusting anything
-built on the adapter.
+`dev` is pytest plus freezegun pinned to appworld's own range, so the suite runs
+against the same freezegun the adapter meets in production.
 
-Commit those two files. They are the evidence for their gates, and on a hosted
-runtime the working directory does not survive the session — `git add results/ &&
-git commit && git push` from the notebook, or download them, before the kernel
-stops.
+Everything writes into `results/`, alongside the Phase 2 evidence:
+`results/phase1_gate.json` after every task, so an interrupted run still leaves
+something, and `results/adapter_probe.json`. Read the probe's failures before
+trusting anything built on the adapter.
+
+```python
+# cell 3: get the evidence off the machine before the session ends
+!cat results/adapter_probe.json
+!cat results/phase1_gate.json
+```
+
+These files are the evidence for their gates, and a hosted runtime's working
+directory does not survive the session. Copy them out and commit them from a
+machine with push access. Pushing from the notebook itself needs a GitHub token
+stored as a Kaggle Secret; a plain `git push` there has no credentials and fails.
 
 For the GPU phase later, Kaggle gives two T4s. They are compute capability 7.5,
 so bfloat16 and FlashAttention-2 are both unavailable and `--dtype float16` is

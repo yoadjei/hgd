@@ -32,7 +32,11 @@ dev = [
     # appworld brings this transitively; declared here so the freezer-leak guard in
     # appworld_env is exercised against the real library rather than a stand-in. a
     # guard tested only against a mock of the thing it guards is not tested.
-    "freezegun>=1.5",
+    # pinned to appworld 0.1.3.post1's own range, because the guard reads freezegun
+    # internals: tests running on 1.5.5 while kaggle runs 1.5.1 would be testing a
+    # different library from the one in production. 1.5.1 is the version whose line
+    # numbers appeared in the real traceback.
+    "freezegun>=1.5.0,<=1.5.1",
 ]
 
 [build-system]
