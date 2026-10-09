@@ -62,15 +62,39 @@ def check(name: str, fn: Callable[[], Any]) -> Any:
     """
     try:
         observed = fn()
-        results.append({"check": name, "ok": True, "observed": observed})
+        results.append({"check": name, "kind": "check", "ok": True,
+                        "observed": observed})
         print(f"  PASS  {name}\n        {observed}", flush=True)
         return observed
     except Exception as exc:
         detail = f"{type(exc).__name__}: {exc}"
-        results.append({"check": name, "ok": False, "observed": detail,
-                        "traceback": traceback.format_exc()})
+        results.append({"check": name, "kind": "check", "ok": False,
+                        "observed": detail, "traceback": traceback.format_exc()})
         print(f"  FAIL  {name}\n        {detail}", flush=True)
         return None
+
+
+def observe(name: str, fn: Callable[[], Any]) -> Any:
+    """Record something about the package that nothing here depends on.
+
+    Unlike ``check``, the value is never a failure, because the pilot runner is
+    correct whatever it turns out to be. Reporting such a thing as a failure keeps
+    the probe permanently red over something that needs no fix, and a probe that
+    is always red stops being read. An observation that cannot be *made* still
+    fails: if the measurement raises, nothing was observed.
+    """
+    try:
+        observed = fn()
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        results.append({"check": name, "kind": "observation", "ok": False,
+                        "observed": detail, "traceback": traceback.format_exc()})
+        print(f"  FAIL  {name}\n        could not observe: {detail}", flush=True)
+        return None
+    results.append({"check": name, "kind": "observation", "ok": True,
+                    "observed": observed})
+    print(f"  NOTE  {name}\n        {observed}", flush=True)
+    return observed
 
 
 def run_gold_solution(env: AppWorldEnvironment) -> None:
@@ -202,34 +226,33 @@ def scenario_completion_flip(env: AppWorldEnvironment) -> None:
 
 
 def scenario_double_complete(env: AppWorldEnvironment) -> None:
-    """Does completing an already-complete task change the evaluation?
+    """What does completing an already-complete task do to the evaluation?
 
-    The first real run measured pass_fraction 1.0 after the gold solution and 0.5
-    later, with a second complete_task() in between. The appworld source does not
-    support that reading: nothing in the evaluation framework counts completion
-    calls, and the drop is explained by the clock having been unfrozen by the
-    load_state() earlier in that run. The supervisor app ships pre-compiled, so the
-    source cannot rule it out entirely, which is why this is measured rather than
-    assumed. On a fresh world with no load_state it should pass; a failure here
-    would mean P_obs is not a property of the trajectory.
+    Measured against appworld 0.1.3.post1 on 2026-09-30, on a fresh world with
+    the clock verified frozen and no load_state: one of the task's two unit tests
+    flips, and pass fraction falls from 1.0 to 0.5. Completion is not idempotent.
+    An earlier version of this docstring blamed the unfrozen clock instead; that
+    was wrong, and this measurement is what showed it.
+
+    The harness copes by stopping at the first completion and refusing to start
+    from a completed task, which keeps the pilot correct whichever way this comes
+    out. So it is an observation, recorded with the tests that flipped, not a
+    check: if a later appworld makes completion idempotent, this says so.
     """
     def failing_tests() -> list[str]:
         return sorted(env.snapshot().get("failures") or [])
 
-    def unchanged_by_a_second_call() -> dict[str, Any]:
+    def second_completion() -> dict[str, Any]:
         run_gold_solution(env)
         before, before_failures = outcome_views(env), failing_tests()
         with silenced():
             env.execute(COMPLETE_TASK)
         after, after_failures = outcome_views(env), failing_tests()
-        assert before == after, (
-            f"evaluation changed: {before} -> {after}; failing tests went "
-            f"{before_failures} -> {after_failures}"
-        )
-        return {"before": before, "after": after}
+        return {"changed": before != after, "before": before, "after": after,
+                "newly_failing": sorted(set(after_failures) - set(before_failures))}
 
-    check("double: a second complete_task() leaves the evaluation alone",
-          unchanged_by_a_second_call)
+    observe("double: what a second complete_task() does to the evaluation",
+            second_completion)
 
 
 def scenario_state_markers(env: AppWorldEnvironment) -> None:
@@ -298,13 +321,20 @@ SCENARIOS: tuple[tuple[str, Callable[[AppWorldEnvironment], None]], ...] = (
 
 def write_report(task_id: str, split: str, result_path: Path) -> None:
     failed = [row for row in results if not row["ok"]]
-    payload = {"task_id": task_id, "split": split, "n_checks": len(results),
-               "n_failed": len(failed), "checks": results}
+    checks = [row for row in results if row["kind"] == "check"]
+    notes = [row for row in results if row["kind"] == "observation"]
+    payload = {"task_id": task_id, "split": split, "n_checks": len(checks),
+               "n_observations": len(notes), "n_failed": len(failed),
+               "checks": results}
     with contextlib.suppress(OSError):
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(json.dumps(payload, indent=2, default=str))
 
-    print(f"\n{len(results) - len(failed)}/{len(results)} assumptions hold")
+    held = sum(1 for row in checks if row["ok"])
+    print(f"\n{held}/{len(checks)} assumptions hold")
+    if notes:
+        print(f"{len(notes)} observation(s) recorded, not counted: nothing here "
+              "depends on them")
     if failed:
         print("\nassumptions that do NOT hold, fix these before the pilot runner:")
         for row in failed:

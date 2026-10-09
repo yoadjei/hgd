@@ -301,23 +301,78 @@ def test_an_already_complete_task_fails_the_flip_check(in_tmp, monkeypatch):
     assert "prove nothing" in flip["observed"]
 
 
-def test_a_second_complete_task_that_changes_the_score_is_reported(in_tmp, monkeypatch):
-    """The real run went from pass_fraction 1.0 to 0.5 with a second
-    complete_task() in between. If that is the cause, P_obs stops being a property
-    of the trajectory and the probe has to say so."""
+class DegradesOnSecondComplete(ProbeWorld):
+    """What appworld 0.1.3.post1 does, measured on 2026-09-30: a second
+    complete_task() on a completed task flips one of its two unit tests."""
 
-    class DegradesOnSecondComplete(ProbeWorld):
-        def execute(self, code):
-            if "complete_task" in code and self._completed:
-                self._liked = False
-            return super().execute(code)
+    def execute(self, code):
+        if "complete_task" in code and self._completed:
+            self._liked = False
+        return super().execute(code)
 
+
+DOUBLE = "double: what a second complete_task() does to the evaluation"
+
+
+def observation(payload, name):
+    return next(row for row in payload["checks"] if row["check"] == name)
+
+
+def test_a_degrading_second_completion_is_recorded_not_failed(in_tmp, monkeypatch):
+    """Completion is not idempotent on the real package, and the harness handles
+    that by never issuing a second one. The pilot runner is correct either way, so
+    this is an observation about the package rather than an assumption anything
+    rests on. Reporting it as a failure kept the probe permanently red with "fix
+    these before the pilot runner" for something that needs no fix, which is how
+    people learn to stop reading a probe."""
+    probe = load_probe(monkeypatch, DegradesOnSecondComplete)
+
+    exit_code = probe.main("train", in_tmp)
+    payload = report(in_tmp)
+
+    assert exit_code == 0
+    assert DOUBLE not in failed_checks(payload)
+    row = observation(payload, DOUBLE)
+    assert row["kind"] == "observation"
+    assert row["observed"]["changed"] is True
+
+
+def test_the_observation_names_the_tests_that_flipped(in_tmp, monkeypatch):
+    """The point of measuring it: the next surprise arrives with its cause."""
     probe = load_probe(monkeypatch, DegradesOnSecondComplete)
 
     probe.main("train", in_tmp)
 
-    assert "double: a second complete_task() leaves the evaluation alone" in \
-        failed_checks(report(in_tmp))
+    flipped = observation(report(in_tmp), DOUBLE)["observed"]["newly_failing"]
+    assert flipped == ["song_liked"]
+
+
+def test_an_idempotent_completion_is_recorded_as_unchanged(in_tmp, monkeypatch):
+    """If a later appworld fixes it, the probe says so instead of going quiet."""
+    probe = load_probe(monkeypatch, ProbeWorld)
+
+    probe.main("train", in_tmp)
+
+    row = observation(report(in_tmp), DOUBLE)
+    assert row["observed"]["changed"] is False
+    assert row["observed"]["newly_failing"] == []
+
+
+def test_an_observation_that_cannot_be_made_is_a_failure(in_tmp, monkeypatch):
+    """Observing is not a licence to swallow errors. If the measurement itself
+    raises, nothing was observed, and that is a failure like any other."""
+
+    class SnapshotBreaksAfterCompletion(DegradesOnSecondComplete):
+        def evaluate(self):
+            if self._completed and not self._liked:
+                raise RuntimeError("evaluation broke")
+            return super().evaluate()
+
+    probe = load_probe(monkeypatch, SnapshotBreaksAfterCompletion)
+
+    probe.main("train", in_tmp)
+
+    assert DOUBLE in failed_checks(report(in_tmp))
 
 
 def test_probe_catches_a_digest_that_does_not_move(in_tmp, monkeypatch):
