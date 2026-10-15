@@ -90,10 +90,13 @@ def run_episode(
     env.reset(task_id, seed)
     # appworld's completion is not idempotent: measured on 2026-09-30, a second
     # apis.supervisor.complete_task() on an already-complete task flipped one of the
-    # task's two unit tests and took pass fraction from 1.0 to 0.5. an episode that
-    # starts complete would spend its first action destroying P_obs, and the way to
-    # get here is to branch from a replayed prefix that already finished. loud,
-    # because an empty log returned quietly reads as a model that said nothing.
+    # task's two unit tests and took pass fraction from 1.0 to 0.5. the test that
+    # flipped is the answer check, so the likely mechanism is the later call
+    # replacing the submitted answer; inferred from the name, not yet measured.
+    # an episode that starts complete would spend its first action destroying
+    # P_obs, and the way to get here is to branch from a replayed prefix that
+    # already finished. loud, because an empty log returned quietly reads as a
+    # model that said nothing.
     if _environment_reports_completion(env):
         raise ValueError(
             f"task {task_id} already reports completion before the first action; "

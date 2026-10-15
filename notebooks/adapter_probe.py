@@ -231,6 +231,8 @@ def scenario_double_complete(env: AppWorldEnvironment) -> None:
     Measured against appworld 0.1.3.post1 on 2026-09-30, on a fresh world with
     the clock verified frozen and no load_state: one of the task's two unit tests
     flips, and pass fraction falls from 1.0 to 0.5. Completion is not idempotent.
+    The test that flips is ``assert answers match.`` (2026-10-15), which fits this
+    call, made with no answer, replacing the answer the gold solution submitted.
     An earlier version of this docstring blamed the unfrozen clock instead; that
     was wrong, and this measurement is what showed it.
 

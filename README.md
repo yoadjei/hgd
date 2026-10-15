@@ -80,11 +80,17 @@ Restart the kernel. Do not re-run cell 1.
 ```python
 # cell 2: verify, then run
 %cd /kaggle/working/hgd
-!python -m pytest -q                          # the suite, on kaggle's interpreter
-!python notebooks/adapter_probe.py            # adapter against the real package
-!python notebooks/phase1_gate.py --tasks 3    # smoke test
-!python notebooks/phase1_gate.py              # the gate, kill condition C
+!PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q   # the suite, on kaggle's interpreter
+!python notebooks/adapter_probe.py                     # adapter against the real package
+!python notebooks/phase1_gate.py --tasks 3             # smoke test
+!python notebooks/phase1_gate.py                       # the gate, kill condition C
 ```
+
+The variable is not optional on Kaggle. pytest loads every installed plugin at
+startup, and the image ships `langsmith`, whose plugin needs pydantic 2. After
+appworld downgrades pydantic to 1.x, that plugin raises on import and pytest dies
+before collecting anything. The suite uses no third-party plugins, so turning
+autoload off loses nothing.
 
 `dev` is pytest plus freezegun pinned to appworld's own range, so the suite runs
 against the same freezegun the adapter meets in production.
@@ -167,8 +173,12 @@ leave the first unable to close.
 **Completion is not idempotent**, and this one is independent of the clock. Measured
 on 2026-09-30 on a fresh world with the freeze verified: running the gold solution
 gives `task_success` true and pass fraction 1.0, and one further
-`apis.supervisor.complete_task()` drops them to false and 0.5. One of the task's two
-unit tests flips. A redundant completion therefore destroys P_obs, so the episode
+`apis.supervisor.complete_task()` drops them to false and 0.5. The test that flips is
+`assert answers match.` (measured 2026-10-15). That fits the second call, made with no
+`answer` argument, replacing the answer the gold solution submitted, so the last
+completion's answer is the one scored. This reading is inferred from the test's name
+and not yet measured; a second call that carries the same answer would settle it.
+A redundant completion therefore destroys P_obs, so the episode
 loop stops at the first completion the environment reports, and `run_episode`
 refuses to start from a task that already reports completion — the way to reach that
 state is to branch from a replayed prefix that already finished. Any runner that
