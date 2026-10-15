@@ -201,10 +201,10 @@ short/long design needs for scenario pairing.
    not a scope change under prompt §5. **Awaiting user decision.**
 2. **Fallback if 3a fails** — decide *after* the pre-gate produces a number, not before.
 3. **Step limit** — ~~resolved~~ the census says 3·H\* is affordable; the audit's value stands.
-4. **Platform** — Colab or Kaggle. The install log showed `google-colab` and a
-   `/usr/local/lib/python3.12/dist-packages` path, which are Colab markers. It matters
-   because Colab free gives one T4, not two, so `--tensor-parallel-size 2` would fail at
-   server startup and the census throughput figure would halve. **Awaiting confirmation.**
+4. **Platform** — ~~Colab or Kaggle~~ resolved: Kaggle. Every run since 2026-09-30 wrote
+   under `/kaggle/working`. The GPU count and driver version are still unmeasured;
+   `notebooks/serve_smoke.py`'s first cell reads both, and the driver decides the vLLM
+   version (0.31.0 needs driver 580+, otherwise 0.19.1, the newest on CUDA 12.8).
 
 ---
 

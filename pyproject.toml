@@ -15,9 +15,12 @@ dependencies = [
 bench = [
     "appworld==0.1.3.post1",
 ]
-# gpu inference. vllm builds from source on most hosts and pulls a large tree;
-# keep it away from anything that does not serve a model. requests lives here
-# because only vllm_client uses it.
+# gpu inference, and it can never share an environment with bench: vllm needs
+# pydantic>=2.12 and appworld pins pydantic<2. asking pip for both is what made it
+# backtrack into an ancient vllm and die building it from source on kaggle. the
+# server runs in its own environment and the harness reaches it over http, which
+# is why vllm_client is plain requests. the readme's gpu section has the install,
+# including why the vllm version depends on the host's nvidia driver.
 serve = [
     "vllm",
     "requests>=2.31",

@@ -111,9 +111,54 @@ directory does not survive the session. Copy them out and commit them from a
 machine with push access. Pushing from the notebook itself needs a GitHub token
 stored as a Kaggle Secret; a plain `git push` there has no credentials and fails.
 
-For the GPU phase later, Kaggle gives two T4s. They are compute capability 7.5,
-so bfloat16 and FlashAttention-2 are both unavailable and `--dtype float16` is
-required, not optional.
+### The GPU smoke test
+
+Before any pilot quota is spent, check that a model server actually runs on this
+hardware. Three facts constrain how, each read from the packages themselves:
+
+- **vLLM and appworld cannot share an environment.** vLLM needs pydantic 2.12 or
+  newer and appworld pins pydantic below 2. The server goes in its own
+  environment; the harness talks to it over HTTP.
+- **The vLLM version depends on the NVIDIA driver.** vLLM 0.20 and later pin a
+  torch built for CUDA 13, which needs driver 580 or newer. vLLM 0.19.1 is the
+  newest on CUDA 12.8, which runs on older drivers.
+- **A T4 is compute capability 7.5.** vLLM still supports it in float16, with
+  attention falling back from FlashAttention to Triton and 4-bit AWQ falling back
+  from Marlin to slower kernels. So the throughput has to be measured, not assumed.
+
+Set the accelerator to **GPU T4 x2** with internet on. No appworld install is needed
+for this, and no kernel restart.
+
+```python
+# cell 1: what is this machine
+!nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
+!rm -rf /kaggle/working/hgd && git clone -q https://github.com/yoadjei/hgd.git /kaggle/working/hgd
+```
+
+Read the driver version, then install vLLM into its own environment, outside
+`/kaggle/working`:
+
+```python
+# cell 2: driver 580 or newer
+!pip install -q uv && uv venv -q /tmp/vllm-env --python 3.12
+!uv pip install -q --python /tmp/vllm-env/bin/python "vllm==0.31.0"
+
+# cell 2, instead, if the driver is older than 580
+!pip install -q uv && uv venv -q /tmp/vllm-env --python 3.12
+!uv pip install -q --python /tmp/vllm-env/bin/python "vllm==0.19.1"
+```
+
+```python
+# cell 3: start the server on one T4, in the background, then measure it
+!nohup /tmp/vllm-env/bin/vllm serve Qwen/Qwen3-8B-AWQ --dtype float16 --max-model-len 16384 --port 8000 > /tmp/vllm.log 2>&1 &
+!python /kaggle/working/hgd/notebooks/serve_smoke.py --model Qwen/Qwen3-8B-AWQ
+!tail -n 30 /tmp/vllm.log
+```
+
+The smoke test waits up to 20 minutes for the server, checks that a request with
+thinking off comes back without a `<think>` block, and measures aggregate decode
+throughput with 16 requests in flight. It writes `results/serve_smoke.json` whatever
+happens. If it fails, the tail of `/tmp/vllm.log` says why.
 
 ## Layout
 
