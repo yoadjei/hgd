@@ -142,7 +142,9 @@ Phase 1 passed on 2026-09-30: 20/20 matched, `no_effect=0`, `skipped=0`,
 `errored=0` against appworld 0.1.3.post1. Kill condition C is satisfied and the
 run is not vacuous — every task moved away from its baseline, which is what the
 no-op guard checks. Three earlier attempts were void rather than failed, each
-caught by that guard rather than by a number looking wrong.
+caught by that guard rather than by a number looking wrong. It reproduced on
+2026-10-15 from a fresh session, 20/20 again with the adapter probe at 25/25; the
+console transcript is `results/kaggle_2026-10-15.log`.
 
 The caveat worth carrying into the paper: fidelity is established under
 `evaluation_digest`, which is behavioural. Two states agreeing on every unit test

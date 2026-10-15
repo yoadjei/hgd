@@ -1,0 +1,116 @@
+# console output from a fresh kaggle session on 2026-10-15, cpu only, appworld
+# 0.1.3.post1, freezegun 1.5.1, pytest 8.4.2, python 3.12. pasted verbatim from
+# the notebook, trailing whitespace trimmed. this is a transcript, not the json the
+# runners wrote: those files
+# stayed on the session's disk. every field of results/phase1_gate.json (verdict
+# per task, totals, errors, traceback) is recoverable from the lines below.
+#
+# omitted above the probe: a pytest crash on startup. kaggle ships langsmith,
+# whose pytest plugin needs pydantic 2, and appworld had downgraded pydantic to
+# 1.x. the suite itself never ran; see the readme's kaggle section for the fix.
+# the run reproduces the 2026-09-30 gate, which also passed 20/20.
+
+probing the adapter on 82e2fac_1, one world per scenario
+
+--- open ---
+  PASS  open: reset() loads the task
+        82e2fac_1
+  PASS  open: close() after this sequence
+        closed without raising
+--- execute ---
+  PASS  execute: reset() loads the task
+        82e2fac_1
+  PASS  execute: returns a str
+        str, 6 chars, repr 'probe\n'
+  PASS  execute: close() after this sequence
+        closed without raising
+--- gold ---
+  PASS  gold: reset() loads the task
+        82e2fac_1
+  PASS  gold: state_hash() moves when the gold solution runs
+        31ae7a02df73 -> ac6c185b79e4
+  PASS  gold: does the solution complete the task by itself
+        True
+  PASS  gold: snapshot() normalises passes and failures to names
+        {'keys': ['difficulty', 'failures', 'num_tests', 'passes', 'success'], 'value_types': {'success': 'bool', 'difficulty': 'int', 'num_tests': 'int', 'passes': 'list', 'failures': 'list'}}
+  PASS  gold: the three outcome views all compute
+        {'task_success': True, 'pass_fraction': 1.0, 'n_checkpoints': 2}
+  PASS  gold: evaluate_checkpoints() runs against a live world
+        [{'checkpoint_id': 'any_pass', 'stage': 0, 'passed': True, 'error': None}]
+  PASS  gold: evaluating does not leak a time freeze
+        2 freezes, unchanged across evaluation
+  PASS  gold: close() after this sequence
+        closed without raising
+--- flip ---
+  PASS  flip: reset() loads the task
+        82e2fac_1
+  PASS  flip: task_completed() goes False -> True on complete_task()
+        False -> True
+  PASS  flip: close() after this sequence
+        closed without raising
+--- double ---
+  PASS  double: reset() loads the task
+        82e2fac_1
+  NOTE  double: what a second complete_task() does to the evaluation
+        {'changed': True, 'before': {'task_success': True, 'pass_fraction': 1.0, 'n_checkpoints': 2}, 'after': {'task_success': False, 'pass_fraction': 0.5, 'n_checkpoints': 2}, 'newly_failing': ['assert answers match.']}
+  PASS  double: close() after this sequence
+        closed without raising
+--- markers ---
+  PASS  markers: reset() loads the task
+        82e2fac_1
+  PASS  markers: save_state() returns a marker
+        '0'
+  PASS  markers: load_state() is refused rather than corrupting the clock
+        refused, and it names replay as the alternative
+  PASS  markers: close() after this sequence
+        closed without raising
+--- clock ---
+  PASS  clock: reset() loads the task
+        82e2fac_1
+  PASS  clock: the shell clock is frozen to the task datetime
+        shell 2023-05-18T12:00:00, task 2023-05-18 12:00:00
+  PASS  clock: close() after this sequence
+        closed without raising
+
+25/25 assumptions hold
+1 observation(s) recorded, not counted: nothing here depends on them
+every assumption the pilot runner rests on is now observed.
+
+wrote /kaggle/working/hgd/results/adapter_probe.json
+gate over 3 tasks from split 'train'
+
+[  1/3] 82e2fac_1       matched
+[  2/3] 82e2fac_2       matched
+[  3/3] 82e2fac_3       matched
+
+fidelity 3/3   no_effect=0   skipped=0   errored=0
+GATE PASSED - Phase 3a permitted.
+
+wrote /kaggle/working/hgd/results/phase1_gate.json
+gate over 20 tasks from split 'train'
+
+[  1/20] 82e2fac_1       matched
+[  2/20] 82e2fac_2       matched
+[  3/20] 82e2fac_3       matched
+[  4/20] 692c77d_1       matched
+[  5/20] 692c77d_2       matched
+[  6/20] 692c77d_3       matched
+[  7/20] 2a163ab_1       matched
+[  8/20] 2a163ab_2       matched
+[  9/20] 2a163ab_3       matched
+[ 10/20] 6104387_1       matched
+[ 11/20] 6104387_2       matched
+[ 12/20] 6104387_3       matched
+[ 13/20] 29caf6f_1       matched
+[ 14/20] 29caf6f_2       matched
+[ 15/20] 29caf6f_3       matched
+[ 16/20] afc0fce_1       matched
+[ 17/20] afc0fce_2       matched
+[ 18/20] afc0fce_3       matched
+[ 19/20] 287e338_1       matched
+[ 20/20] 287e338_2       matched
+
+fidelity 20/20   no_effect=0   skipped=0   errored=0
+GATE PASSED - Phase 3a permitted.
+
+wrote /kaggle/working/hgd/results/phase1_gate.json
