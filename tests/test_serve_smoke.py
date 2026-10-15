@@ -13,6 +13,7 @@ import importlib.util
 import json
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -165,3 +166,122 @@ def test_a_reply_without_choices_is_a_failure(tmp_path, missing, monkeypatch):
 
     assert code == 1
     assert "no choices" in report["error"]
+
+
+# --- watching the server's log while waiting --------------------------------
+# the server downloads the model and compiles before /health answers, and it does
+# so in a background process whose output goes to a log file. the first version
+# showed that log only after waiting up to 20 minutes, so a server downloading 6
+# GB and a server that crashed in its first second looked identical for 20
+# minutes. on kaggle that read as "it's not downloading".
+
+
+def test_progress_from_the_server_log_is_shown_while_waiting(tmp_path, capsys):
+    """Download progress arrives as carriage-return updates on one line; the
+    latest one is what matters."""
+    smoke = load_smoke()
+    log = tmp_path / "vllm.log"
+    log.write_text("INFO starting\nmodel.safetensors:  10%|#  \rmodel.safetensors:  40%|####  ")
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+               wait_s=0.3, poll_s=0.05, log_path=log, report_every=0)
+
+    shown = capsys.readouterr().out
+    assert "40%" in shown
+
+
+def test_a_server_that_exited_stops_the_wait_at_once(tmp_path):
+    """The readme's launch line writes this after vllm exits. A server that has
+    exited is never coming up, and waiting out the full timeout after that wastes
+    GPU quota and hides the cause."""
+    smoke = load_smoke()
+    log = tmp_path / "vllm.log"
+    log.write_text(
+        "INFO loading weights\n"
+        "Traceback (most recent call last):\n"
+        '  File "worker.py", line 1, in <module>\n'
+        "RuntimeError: CUDA error: no kernel image is available for execution\n"
+        "server exited with status 1\n"
+    )
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    started = time.monotonic()
+    code = smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+                      wait_s=60, poll_s=0.05, log_path=log)
+    elapsed = time.monotonic() - started
+
+    report = json.loads((tmp_path / "serve_smoke.json").read_text())
+    assert code == 1
+    assert elapsed < 10
+    assert "exited during startup" in report["error"]
+    assert "no kernel image" in report["error"]
+
+
+def test_a_missing_binary_stops_the_wait_at_once(tmp_path):
+    """What the launch line leaves when the install failed: the shell cannot find
+    vllm, and the exit line follows."""
+    smoke = load_smoke()
+    log = tmp_path / "vllm.log"
+    log.write_text("sh: 1: /tmp/vllm-env/bin/vllm: not found\n"
+                   "server exited with status 127\n")
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    code = smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+                      wait_s=60, poll_s=0.05, log_path=log)
+
+    report = json.loads((tmp_path / "serve_smoke.json").read_text())
+    assert code == 1
+    assert "vllm: not found" in report["error"]
+
+
+def test_nohup_failing_to_start_the_command_stops_the_wait_at_once(tmp_path):
+    """A launch without the exit line, run through nohup: nohup writes this when
+    the binary is missing, and then nothing else ever runs."""
+    smoke = load_smoke()
+    log = tmp_path / "vllm.log"
+    log.write_text("nohup: failed to run command '/tmp/vllm-env/bin/vllm': "
+                   "No such file or directory\n")
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    code = smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+                      wait_s=60, poll_s=0.05, log_path=log)
+
+    report = json.loads((tmp_path / "serve_smoke.json").read_text())
+    assert code == 1
+    assert "failed to run command" in report["error"]
+
+
+def test_a_traceback_the_server_survives_does_not_stop_the_wait(tmp_path):
+    """A logged traceback is not a dead server: libraries log exceptions they
+    recover from. Stopping on one would report a crash while the server was still
+    loading, and every re-run would stop on the same line until the log was
+    replaced. Only the exit line is proof."""
+    smoke = load_smoke()
+    log = tmp_path / "vllm.log"
+    log.write_text(
+        "Traceback (most recent call last):\n"
+        "ImportError: optional kernel unavailable, falling back\n"
+        "INFO loading weights\n"
+    )
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    code = smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+                      wait_s=0.3, poll_s=0.05, log_path=log)
+
+    report = json.loads((tmp_path / "serve_smoke.json").read_text())
+    assert code == 1
+    assert "TimeoutError" in report["error"]
+
+
+def test_a_log_that_does_not_exist_yet_is_not_an_error(tmp_path):
+    """The log appears a moment after the server starts. Until then, keep waiting."""
+    smoke = load_smoke()
+    base_url = f"http://127.0.0.1:{free_port_with_nothing_listening()}"
+
+    code = smoke.main("Qwen/Qwen3-8B-AWQ", base_url=base_url, out_dir=tmp_path,
+                      wait_s=0.3, poll_s=0.05, log_path=tmp_path / "absent.log")
+
+    report = json.loads((tmp_path / "serve_smoke.json").read_text())
+    assert code == 1
+    assert "TimeoutError" in report["error"]

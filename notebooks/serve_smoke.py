@@ -15,7 +15,11 @@ Standard library only, on purpose. vLLM needs pydantic 2 and appworld pins
 pydantic 1, so the server runs in its own environment and this runs from the
 notebook kernel, talking to it over HTTP the way the pilot will.
 
-    !python notebooks/serve_smoke.py --model Qwen/Qwen3-8B-AWQ
+    !python notebooks/serve_smoke.py --model Qwen/Qwen3-8B-AWQ --log /tmp/vllm.log
+
+--log is the server's output. Without it the wait is blind; the readme's launch
+line also writes an exit line to it, which lets the wait stop the moment the
+server dies.
 """
 
 from __future__ import annotations
@@ -32,6 +36,13 @@ from typing import Any
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 THINK_TAG = "<think>"
+# lines in the server log that prove the server is never coming up. the first is
+# written by the readme's launch line once vllm has exited, whatever the reason;
+# the second is nohup failing to start the command at all. a traceback is
+# deliberately not one: libraries log exceptions they recover from, and stopping
+# on one would report a crash while the server was still loading
+EXIT_MARKERS = ("server exited with status", "nohup: failed to run command")
+LOG_TAIL_BYTES = 64_000
 
 
 def _get(url: str, timeout: float) -> tuple[int, str]:
@@ -48,11 +59,36 @@ def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def wait_for_health(base_url: str, wait_s: float, poll_s: float = 5.0) -> float:
-    """Seconds until /health answers 200. Startup on a T4 compiles and captures
-    graphs, which takes minutes, so this polls rather than failing on the first
-    refused connection."""
+def log_tail(log_path: Path) -> list[str]:
+    """The last lines of the server log, or nothing if it does not exist yet.
+
+    Download progress bars rewrite one line with carriage returns, so both line
+    endings split; otherwise the latest progress is buried at the end of one
+    enormous line.
+    """
+    try:
+        with open(log_path, "rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - LOG_TAIL_BYTES))
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    return [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+
+
+def wait_for_health(base_url: str, wait_s: float, poll_s: float = 5.0,
+                    log_path: Path | None = None, report_every: float = 30.0) -> float:
+    """Seconds until /health answers 200.
+
+    Startup on a T4 downloads the weights, compiles and captures graphs, which
+    takes minutes, so this polls rather than failing on the first refused
+    connection. While it waits it shows the latest line of the server's log, and
+    it stops at once if the log shows the server has exited: the first version
+    only showed the log after the full wait, so a server downloading 6 GB and a
+    server that died in its first second looked the same for twenty minutes.
+    """
     started = time.monotonic()
+    last_report = float("-inf")
     while True:
         try:
             status, _ = _get(f"{base_url}/health", timeout=10)
@@ -60,7 +96,20 @@ def wait_for_health(base_url: str, wait_s: float, poll_s: float = 5.0) -> float:
                 return round(time.monotonic() - started, 1)
         except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
             pass
-        if time.monotonic() - started >= wait_s:
+
+        elapsed = time.monotonic() - started
+        if log_path is not None:
+            lines = log_tail(log_path)
+            if any(marker in line for line in lines for marker in EXIT_MARKERS):
+                raise RuntimeError(
+                    "server exited during startup; end of its log:\n"
+                    + "\n".join(lines[-25:])
+                )
+            if lines and elapsed - last_report >= report_every:
+                print(f"  [{elapsed:5.0f} s] {lines[-1][:160]}", flush=True)
+                last_report = elapsed
+
+        if elapsed >= wait_s:
             raise TimeoutError(f"no healthy server at {base_url} after {wait_s:.0f} s")
         time.sleep(poll_s)
 
@@ -119,12 +168,14 @@ def throughput(base_url: str, model: str, n: int, max_tokens: int) -> dict[str, 
 
 def main(model: str, base_url: str = "http://localhost:8000", wait_s: float = 1200,
          n_concurrent: int = 16, max_tokens: int = 256,
-         out_dir: Path | None = None, poll_s: float = 5.0) -> int:
+         out_dir: Path | None = None, poll_s: float = 5.0,
+         log_path: Path | None = None, report_every: float = 30.0) -> int:
     result_path = (out_dir or RESULTS_DIR) / "serve_smoke.json"
     report: dict[str, Any] = {"model": model, "base_url": base_url, "ok": False}
     try:
         print(f"waiting up to {wait_s:.0f} s for {base_url}/health", flush=True)
-        report["health_wait_s"] = wait_for_health(base_url, wait_s, poll_s)
+        report["health_wait_s"] = wait_for_health(base_url, wait_s, poll_s,
+                                                  log_path, report_every)
         print(f"  healthy after {report['health_wait_s']} s", flush=True)
 
         try:
@@ -165,6 +216,9 @@ if __name__ == "__main__":
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--out", type=Path, default=None,
                         help="where to write the result (default: results/)")
+    parser.add_argument("--log", type=Path, default=None,
+                        help="the server's log file: shown while waiting, and a "
+                             "crash in it stops the wait at once")
     args = parser.parse_args()
     raise SystemExit(main(args.model, args.base_url, args.wait, args.concurrent,
-                          args.max_tokens, args.out))
+                          args.max_tokens, args.out, log_path=args.log))

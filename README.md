@@ -140,25 +140,45 @@ Read the driver version, then install vLLM into its own environment, outside
 
 ```python
 # cell 2: driver 580 or newer
-!pip install -q uv && uv venv -q /tmp/vllm-env --python 3.12
-!uv pip install -q --python /tmp/vllm-env/bin/python "vllm==0.31.0"
+!pip install uv && uv venv /tmp/vllm-env --python 3.12
+!uv pip install --python /tmp/vllm-env/bin/python "vllm==0.31.0"
+!/tmp/vllm-env/bin/vllm --version
 
 # cell 2, instead, if the driver is older than 580
-!pip install -q uv && uv venv -q /tmp/vllm-env --python 3.12
-!uv pip install -q --python /tmp/vllm-env/bin/python "vllm==0.19.1"
+!pip install uv && uv venv /tmp/vllm-env --python 3.12
+!uv pip install --python /tmp/vllm-env/bin/python "vllm==0.19.1"
+!/tmp/vllm-env/bin/vllm --version
 ```
+
+No `-q` on purpose: the install takes minutes, and a quiet install that failed
+looks the same as one still running. The last line has to print a version before
+cell 3 is worth running.
 
 ```python
 # cell 3: start the server on one T4, in the background, then measure it
-!nohup /tmp/vllm-env/bin/vllm serve Qwen/Qwen3-8B-AWQ --dtype float16 --max-model-len 16384 --port 8000 > /tmp/vllm.log 2>&1 &
-!python /kaggle/working/hgd/notebooks/serve_smoke.py --model Qwen/Qwen3-8B-AWQ
-!tail -n 30 /tmp/vllm.log
+!pkill -f "[v]llm serve"; timeout 60 sh -c 'while pgrep -f "[v]llm serve" > /dev/null; do sleep 1; done'
+!nohup sh -c '/tmp/vllm-env/bin/vllm serve Qwen/Qwen3-8B-AWQ --dtype float16 --max-model-len 16384 --port 8000; echo "server exited with status $?"' > /tmp/vllm.log 2>&1 &
+!python /kaggle/working/hgd/notebooks/serve_smoke.py --model Qwen/Qwen3-8B-AWQ --log /tmp/vllm.log
 ```
 
-The smoke test waits up to 20 minutes for the server, checks that a request with
-thinking off comes back without a `<think>` block, and measures aggregate decode
-throughput with 16 requests in flight. It writes `results/serve_smoke.json` whatever
-happens. If it fails, the tail of `/tmp/vllm.log` says why.
+The server runs in the background, so its output, including the weight download,
+goes to `/tmp/vllm.log` rather than the cell. The smoke test shows the latest line
+of that log every 30 seconds while it waits. The `echo` after the server is what
+lets it stop at once if the server exits instead of waiting out the full 20
+minutes; the end of the log then says why. A traceback alone does not stop it,
+because libraries log exceptions they recover from.
+
+The first line stops any server left from an earlier run, which would otherwise
+hold the port and the GPU memory, and waits up to a minute for it to exit. The
+brackets in `[v]llm` match `vllm` but not the literal text `[v]llm`, so the line
+never matches its own command.
+
+Once healthy, the smoke test checks that a request with thinking off comes back
+without a `<think>` block, and measures aggregate decode throughput with 16
+requests in flight. It writes `results/serve_smoke.json` whatever happens.
+
+The weights download to `/root/.cache/huggingface`, which does not survive the
+session: every new session downloads them again.
 
 ## Layout
 

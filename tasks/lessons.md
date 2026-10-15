@@ -153,3 +153,19 @@ sequence that caused it.
 raise. Teardown that can fail is a check, not teardown. When a probe exists to
 find which operation breaks something, give each candidate sequence its own
 fixture, or the answer is one bit wide.
+
+## 7. A long-running command handed over must show progress and fail fast
+
+**What went wrong.** The GPU cells installed vLLM with `-q` and started the server
+in the background with its output in a log file. The smoke test then waited up to
+twenty minutes before anyone saw that log. A server downloading 6 GB, a server
+that crashed in its first second, and an install that had failed silently all
+looked the same, and on Kaggle that read as "it's not downloading". Then the
+first fix stopped on any traceback in the log, which would have reported a crash
+while the server was still loading, because libraries log exceptions they
+recover from, and every re-run would have stopped on the same line.
+
+**Rule.** A command that runs for minutes on someone else's machine shows its
+progress as it runs, and is never made quiet. Anything that runs in the
+background has a watcher that stops on proof it has died: an exit line the
+launch command writes, not a pattern guessed from log text.
