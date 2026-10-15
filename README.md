@@ -130,10 +130,14 @@ Set the accelerator to **GPU T4 x2** with internet on. No appworld install is ne
 for this, and no kernel restart.
 
 ```python
-# cell 1: what is this machine
+# cell 1: what is this machine, and a clean start
 !nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
-!rm -rf /kaggle/working/hgd && git clone -q https://github.com/yoadjei/hgd.git /kaggle/working/hgd
+!rm -rf /kaggle/working/hgd /tmp/vllm-env /tmp/vllm.log
+!git clone -q https://github.com/yoadjei/hgd.git /kaggle/working/hgd
 ```
+
+Cell 1 removes anything an earlier attempt left in this session, including a
+half-built environment, but keeps the downloaded weights.
 
 Read the driver version, then install vLLM into its own environment, outside
 `/kaggle/working`:
@@ -176,6 +180,12 @@ never matches its own command.
 Once healthy, the smoke test checks that a request with thinking off comes back
 without a `<think>` block, and measures aggregate decode throughput with 16
 requests in flight. It writes `results/serve_smoke.json` whatever happens.
+
+```python
+# cell 4: the evidence, before the session ends
+!cat /kaggle/working/hgd/results/serve_smoke.json
+!tail -n 40 /tmp/vllm.log
+```
 
 The weights download to `/root/.cache/huggingface`, which does not survive the
 session: every new session downloads them again.
